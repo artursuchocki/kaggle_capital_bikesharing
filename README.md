@@ -4,7 +4,7 @@ ___
 
 ___
 
-<h1 align="center"><a href='https://www.kaggle.com/c/bike-sharing-demand'>Kaggle Competition Project</a></h3> 
+<h1 align="center"><a href='https://www.kaggle.com/c/bike-sharing-demand'>Kaggle Competition Project</a></h1> 
 ___
 
 # 1. Goal
