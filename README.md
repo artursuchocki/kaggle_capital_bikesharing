@@ -1,13 +1,14 @@
 ___
 
-<a href='https://www.capitalbikeshare.com'> <img src='CapitalBikeshare_Logo.jpg' /></a>
+<a href='https://www.capitalbikeshare.com'><img src='CapitalBikeshare_Logo.jpg' align="middle"></a>
 
 ___
 
 <h1 align="center"><a href='https://www.kaggle.com/c/bike-sharing-demand'>Kaggle Competition Project</a></h1> 
-___
 
-# 1. Goal
+
+
+# Goal
 
 
 Bike sharing systems are a means of renting bicycles where the process of obtaining membership, rental, and bike return is automated via a network of kiosk locations throughout a city. Using these systems, people are able rent a bike from a one location and return it to a different place on an as-needed basis. Currently, there are over 500 bike-sharing programs around the world.
