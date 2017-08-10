@@ -20,7 +20,7 @@
 # 
 # ___
 
-# ** Import Apache Spark 2.1libraries and setup environment variables **
+# ** Import Apache Spark 2.1libraries and setup environment variables. In case for cluster deployment you should probably remove this cell. **
 
 # In[1]:
 
@@ -52,7 +52,8 @@ conf = (SparkConf()
          .setAppName("Capital_Bike_weather_mining")
         .set("spark.executor.memory", "4g")
         .set("spark.driver.memory", "8g"))
-
+        #.setMaster("yarn") - for cluster deployment
+    
 SpContext = SparkContext.getOrCreate(conf = conf)
 SqlContext = SQLContext(SpContext)
 SpContext = SpContext.setCheckpointDir("checkpoint")
@@ -96,12 +97,12 @@ get_ipython().magic('matplotlib inline')
 
 # ** Read in the Customers Bike Rental csv train and test files as a Pandas DataFrame.**
 
-# In[4]:
+# In[217]:
 
 train_df = pd.read_csv("train.csv")
 
 
-# In[5]:
+# In[218]:
 
 test_df = pd.read_csv("test.csv")
 
@@ -110,28 +111,32 @@ test_df = pd.read_csv("test.csv")
 
 # ** We will try both methods: predict amount of casual and regitered rentals separately and predict sum of those (count) **
 
-# In[6]:
+# In[219]:
 
 train_df.head()
 
 
-# In[7]:
+# In[220]:
 
 test_df.head()
 
 
 # ** Check out customers rental info() and describe() methods. Thera are total 10866 entries, none of the column has missing values**
 
-# In[8]:
+# In[221]:
 
 train_df.info()
 
 
-# In[9]:
+# In[222]:
 
-continuous_var = ['temp', 'atemp', 'humidity', 'windspeed']
-categorical_var=['season','weather','year','month','hour','dayofweek']
+continuous_var = ['temp', 'atemp', 'humidity', 'windspeed'] 
+
+# exclude binary variables
+categorical_var=['season','weather','year','month','hour','dayofweek','hour_cat', 'temp_cat']
+
 dependent_variables = ['casual', 'registered', 'count']
+
 added_cat_var = ['season_cat', 'month_cat', 'dayofweek_cat', 'weather_cat']
 
 
@@ -143,7 +148,7 @@ weatherDict = {1: "Clear", 2 : "Mist", 3 : "Light_Snow", 4 :"Heavy_Rain" }
 
 # ** Data preparation part: parse data timestamp, add dummy and derivated variables.**
 
-# In[10]:
+# In[223]:
 
 def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = False):
     
@@ -153,36 +158,132 @@ def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = Fa
     customers_rental["day"] = customers_rental["date"].dt.day
     customers_rental["hour"] = customers_rental["date"].dt.hour
     customers_rental["dayofweek"] = customers_rental["date"].dt.dayofweek
+    customers_rental["weekofyear"] = customers_rental["date"].dt.weekofyear
     
     customers_rental["season_cat"] = customers_rental["season"].map(seasonDict)
     customers_rental["month_cat"] = customers_rental["month"].map(monthDict)    
     customers_rental["dayofweek_cat"] = customers_rental["dayofweek"].map(dayofweekDict)
     customers_rental["weather_cat"] = customers_rental["weather"].map(weatherDict)
     
-    # create derivate variable: day-to-day and hour change for continuous variables
-    for var in continuous_var:
-        customers_rental[var+'_hour_change'] = customers_rental[var].pct_change()
-        customers_rental[var+'_day_change'] = customers_rental[var].pct_change(periods=24)
-    
     customers_rental['atemp_temp_diff'] = customers_rental['atemp'] - customers_rental['temp']
     
+    # create derivate variable: day-to-day and hour change for continuous variables
+    for var in continuous_var:
+        customers_rental[var+'_hour_change_pct'] = customers_rental[var].pct_change() * 100
+        customers_rental[var+'_day_change_pct'] = customers_rental[var].pct_change(periods=24) * 100
+        # to make positive values means percentage increase of variable in next hour
+        customers_rental[var+'_next_hour_change_pct'] = customers_rental[var].pct_change(periods=-1)*(-1) * 100
+       
+    # from EDA 
+    customers_rental['bike_season'] = 0
+    customers_rental.loc[(customers_rental['month'] >= 4) & (customers_rental['month'] <= 11), 'bike_season'] = 1
     
-    # create additional variable about rental traffic, 
-    # specific hours are taken from Exploratoty Data Analysis from next section
-    customers_rental['traffic_peak'] = 0
-    customers_rental.loc[(customers_rental['workingday'] == 1) &                    ((customers_rental['hour'] == 8) | (customers_rental['hour'] == 17) |                     (customers_rental['hour'] == 18)), 'traffic_peak'] = 1  
+    # create additional variable about rental traffic by hour, 
+    # specific hours are taken from Exploratoty Data Analysis from clustermap by the end of next section
+    customers_rental['hour_cat'] = 0
+    customers_rental.loc[(customers_rental['hour'] <= 6) | (customers_rental['hour'] == 23), 'hour_cat'] = 1
+    customers_rental.loc[(customers_rental['hour'] >= 7) & (customers_rental['hour'] <= 8) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 2
+    customers_rental.loc[(customers_rental['hour'] >= 7) & (customers_rental['hour'] <= 8) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 3
+    customers_rental.loc[((customers_rental['hour'] >= 20) & (customers_rental['hour'] <= 22)) |                          (customers_rental['hour'] == 9), 'hour_cat'] = 4
+    customers_rental.loc[(customers_rental['hour'] >= 10) & (customers_rental['hour'] <= 16) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 5
+    customers_rental.loc[(customers_rental['hour'] >= 10) & (customers_rental['hour'] <= 16) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 6
+    customers_rental.loc[(customers_rental['hour'] >= 17) & (customers_rental['hour'] <= 18) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 7
+    customers_rental.loc[(customers_rental['hour'] >= 17) & (customers_rental['hour'] <= 18) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 8
     
-    customers_rental.loc[(customers_rental['workingday'] == 0) &                    ((customers_rental['hour'] >= 12) & (customers_rental['hour'] <= 15)), 'traffic_peak'] = 1
+    # create additional variable about rental traffic by temp, 
+    # specific hours are taken from Exploratoty Data Analysis from clustermap by the end of next section
+    customers_rental['temp_cat'] = 0
+    customers_rental.loc[(customers_rental['temp'].round() < 13), 'temp_cat'] = 1
+    customers_rental.loc[(customers_rental['temp'].round() >= 13) & (customers_rental['temp'].round() <= 19) &                          (customers_rental['workingday'] == 0), 'temp_cat'] = 2
+    customers_rental.loc[(customers_rental['temp'].round() >= 13) & (customers_rental['temp'].round() <= 19) &                          (customers_rental['workingday'] == 1), 'temp_cat'] = 3
+    customers_rental.loc[(customers_rental['temp'].round() >= 20) & (customers_rental['temp'].round() <= 29) &                          (customers_rental['workingday'] == 0), 'temp_cat'] = 4
+    customers_rental.loc[(customers_rental['temp'].round() >= 20) & (customers_rental['temp'].round() <= 29) &                          (customers_rental['workingday'] == 1), 'temp_cat'] = 5
+    customers_rental.loc[(customers_rental['temp'].round() >= 30), 'temp_cat'] = 6
     
+
+#     customers_rental['hour_cat'] = 0
+#     customers_rental.loc[(customers_rental['hour'] >= 1) & (customers_rental['hour'] <= 5), 'hour_cat'] = 1
+#     customers_rental.loc[(customers_rental['hour'] == 23) | (customers_rental['hour'] == 0) | \
+#                          (customers_rental['hour'] == 6), 'hour_cat'] = 2
+#     customers_rental.loc[(customers_rental['hour'] >= 12) & (customers_rental['hour'] <= 15), 'hour_cat'] = 3
+#     customers_rental.loc[(customers_rental['hour'] == 7) | (customers_rental['hour'] == 9) | \
+#                         (customers_rental['hour'] == 11) | (customers_rental['hour'] == 20), 'hour_cat'] = 4
+#     customers_rental.loc[(customers_rental['hour'] == 10) | (customers_rental['hour'] == 21) | \
+#                          (customers_rental['hour'] == 22), 'hour_cat'] = 5
+#     customers_rental.loc[(customers_rental['hour'] == 18) | (customers_rental['hour'] == 17), 'hour_cat'] = 6
+#     customers_rental.loc[(customers_rental['hour'] == 8) | (customers_rental['hour'] == 16) | \
+#                          (customers_rental['hour'] == 19), 'hour_cat'] = 7
+    
+    
+#     # create additional variable about rental traffic by temp, 
+#     # specific hours are taken from Exploratoty Data Analysis from clustermap by the end of next section
+#     customers_rental['temp_cat'] = 0
+#     customers_rental.loc[(customers_rental['temp'].round() >= 13) & (customers_rental['temp'].round() <= 19), 'temp_cat'] = 1
+#     customers_rental.loc[(customers_rental['temp'].round() >= 39), 'temp_cat'] = 2
+#     customers_rental.loc[(customers_rental['temp'].round() < 2), 'temp_cat'] = 3
+#     customers_rental.loc[(customers_rental['temp'].round() >= 25) & (customers_rental['temp'].round() <= 27), 'temp_cat'] = 4
+#     customers_rental.loc[(customers_rental['temp'].round() >= 20) & (customers_rental['temp'].round() <= 23) | \
+#                          (customers_rental['temp'].round() == 28), 'temp_cat'] = 5
+#     customers_rental.loc[(customers_rental['temp'].round() == 24) | (customers_rental['temp'].round() == 29), 'temp_cat'] = 6
+#     customers_rental.loc[(customers_rental['temp'].round() >= 7) & (customers_rental['temp'].round() <= 10), 'temp_cat'] = 7
+#     customers_rental.loc[(customers_rental['temp'].round() >= 11) & (customers_rental['temp'].round() <= 12), 'temp_cat'] = 8
+#     customers_rental.loc[(customers_rental['temp'].round() >= 4) & (customers_rental['temp'].round() <= 6) | \
+#                          (customers_rental['temp'].round() == 2), 'temp_cat'] = 9
+#     customers_rental.loc[(customers_rental['temp'].round() == 3), 'temp_cat'] = 10
+#     customers_rental.loc[(customers_rental['temp'].round() == 35), 'temp_cat'] = 11
+#     customers_rental.loc[(customers_rental['temp'].round() == 30) | (customers_rental['temp'].round() == 32), 'temp_cat'] = 12
+#     customers_rental.loc[(customers_rental['temp'].round() == 31) | (customers_rental['temp'].round() == 33) | \
+#                          (customers_rental['temp'].round() == 34) | (customers_rental['temp'].round() == 36), 'temp_cat'] = 13 
+#     customers_rental.loc[(customers_rental['temp'].round() >= 37) & (customers_rental['temp'].round() <= 38), 'temp_cat'] = 14
+    
+#     customers_rental['traffic_peak'] = 0
+#     customers_rental.loc[(customers_rental['workingday'] == 1) & \
+#                    ((customers_rental['hour'] == 8) | (customers_rental['hour'] == 17) | \
+#                     (customers_rental['hour'] == 18)), 'traffic_peak'] = 1 
+#     customers_rental.loc[(customers_rental['workingday'] == 0) & \
+#                    ((customers_rental['hour'] >= 10) & (customers_rental['hour'] <= 19)), 'traffic_peak'] = 1
+        
+    
+    # data taken from independent source weather
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 15), "workingday"] = 1
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 16), "workingday"] = 1
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 15), "holiday"] = 1
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 16), "holiday"] = 1
+    if (Kaggle):
+        customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 25), "holiday"] = 1
+        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 23), "holiday"] = 1
+        customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 25), "workingday"] = 0
+        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 23), "workingday"] = 0
+        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 10)                          & (customers_rental['day'] == 30), "holiday"] = 1
+        customers_rental.loc[(customers_rental['month'] == 12)                          & ((customers_rental['day'] == 24) |                             (customers_rental['day'] == 26)), "workingday"] = 0
+        customers_rental.loc[(customers_rental['month'] == 12)                          & ((customers_rental['day'] == 24) |                             (customers_rental['day'] == 25) |                            (customers_rental['day'] == 26)), "holiday"] = 1
+
+    #storms
+    customers_rental.loc[(customers_rental['month'] == 2012) & (customers_rental['month'] == 5)                          & (customers_rental['day'] == 21), "holiday"] = 1
+    #tornado
+    customers_rental.loc[(customers_rental['month'] == 2012) & (customers_rental['month'] == 6)                          & (customers_rental['day'] == 1), "holiday"] = 1
+    
+    # next_hour_weather is category for next hour weather 
+    next_hour_weather = customers_rental['weather'].copy()
+    next_hour_weather[len(next_hour_weather)] = next_hour_weather[len(next_hour_weather)-1]
+    next_hour_weather.pop(0)
+    customers_rental['next_hour_weather'] = next_hour_weather.reset_index()['weather']
     
     # create dummy variables (if needed)    
     if (get_dummy):
         customers_rental = pd.get_dummies(data=customers_rental, columns=categorical_var, drop_first=True)
 
     
+    
     # first day don't have pct_change, as well as there are some divide by zero operation (inf)
     customers_rental = customers_rental.replace([np.inf, -np.inf], np.nan)
-    customers_rental = customers_rental.fillna(customers_rental.mean())
+    # replace nan by interpolating
+    dt = pd.DatetimeIndex(customers_rental['datetime'])
+    customers_rental.set_index(dt, inplace=True)
+    # first argument can't be zero for interpolation to works
+    customers_rental.iloc[0] = customers_rental.iloc[0].fillna(0)
+    customers_rental = customers_rental.interpolate(method='time')
+    #customers_rental = customers_rental.fillna(customers_rental.mean())
     
     
     # Apache Spark solver uses square loss function for minimalization. 
@@ -206,34 +307,33 @@ def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = Fa
 
 # ** We will use dataset with dummy variables for linear regression **
 
-# In[11]:
+# In[235]:
 
 train_dummy = prepare_data(train_df.copy(), get_dummy=True)
 test_dummy_KAGGLE = prepare_data(test_df.copy(), get_dummy=True, test_data=True, Kaggle=True)
+all_dummy = train_dummy.append(test_dummy_KAGGLE)
 
 
 # **We will use dataset without dummy varaibles for random forest regression and gradient boosted regression.**
 
-# In[12]:
+# In[236]:
 
 train_no_dummy = prepare_data(train_df.copy(), get_dummy=False)
 test_no_dummy_KAGGLE = prepare_data(test_df.copy(), get_dummy=False, test_data=True, Kaggle=True)
+all_no_dummy = train_no_dummy.append(test_no_dummy_KAGGLE)
 
 
-# ** Three last 3 columns are our independent variables **
+# ** Three last 3 columns are our independent log variables **
 
-# In[13]:
+# In[226]:
 
 train_no_dummy.info()
 
 
-# ___
 # # 3. Exploratory Data Analysis
-# ---
-# 
 # ** Let's explore the data! **
 
-# In[14]:
+# In[229]:
 
 sns.set_palette("coolwarm")
 sns.set_style('whitegrid')
@@ -241,28 +341,68 @@ sns.set_style('whitegrid')
 
 # ** Median of continuous variables looks reasonably. There are many outliers in windspeed variable and some outliers for zero humidity. **
 
-# In[15]:
+# In[230]:
 
 fig,(ax1,ax2)= plt.subplots(nrows=2, figsize=(8,8))
 sns.boxplot(data=train_no_dummy[continuous_var], ax=ax1)
 sns.boxplot(data=train_no_dummy[dependent_variables], ax=ax2)
 
 
-# In[16]:
+# In[231]:
 
 train_mean_2011 = train_no_dummy[train_no_dummy['year']==2011].groupby(['year','month','day']).mean()
 train_mean_2012 = train_no_dummy[train_no_dummy['year']==2012].groupby(['year','month','day']).mean()
 
 
-# ### Weather for 2011
+# ### Let's dive deeper into each continuous variable
+# ** Explore data of average hour bike rentals across all days ** 
+
+# In[237]:
+
+train_daily_mean = train_no_dummy.groupby(['year','month','day']).mean()
+train_daily_mean_window = train_daily_mean.rolling(window=7).mean()
+
+all_daily_mean = all_no_dummy.groupby(['year','month','day']).mean()
+all_daily_mean_window = all_daily_mean.rolling(window=7).mean()
+
+
+# In[238]:
+
+def plot_with_window(column, all=True, window=True):   
+    if (all):
+        data = all_daily_mean
+        data_window = all_daily_mean_window
+    else:
+        data = train_daily_mean
+        data_window = train_daily_mean_window
+        
+    plt.figure(figsize=(9,4))
+    data[column].plot()
+    data_window[column].plot(label='7 Day Avg', lw=2, ls='--', c='red')
+    
+    plt.legend(loc='best')
+    plt.ylabel(column)
+    plt.title('Daily mean of ' + column + '  over time')
+    plt.tight_layout()
+    
+    diff = data[column] - data_window[column]
+    return diff[np.abs(diff) > 3 * diff.std()]
+
+
+# In[239]:
+
+plot_with_window('count', all=False)
+
+
 # ** From the blot below we can see that there is only one daily outlier for humidity. Let's try to find out whether is had some impact on amount of rented bikes. **
 
-# In[17]:
+# In[78]:
 
 plt.figure(figsize=(10,6))
 train_mean_2011['temp'].plot(c='orange')
 train_mean_2011['humidity'].plot()
 train_mean_2011['windspeed'].plot(c='green')
+
 
 plt.title("Weather for 2011")
 plt.legend(loc='best')
@@ -270,19 +410,19 @@ plt.legend(loc='best')
 
 # ** Minimum humidity was on (2011, 3, 10), and minimum dependent count variable was on (2011, 3, 6) **
 
-# In[18]:
+# In[79]:
 
 train_mean_2011.idxmin()
 
 
-# In[19]:
+# In[80]:
 
 train_mean_2011.idxmax()
 
 
 # ** During minium day for count variable (2011, 3, 6), humidity had one of its highest value. It matches our understanding - there are fewer bike rentals during rain. On (2011, 3, 10) humidity has zero daily mean value although in adjacent days there was high value for humidity. It looks like some missing values. **
 
-# In[20]:
+# In[81]:
 
 train_mean_2011.ix[(2011, 3, 4):(2011, 3, 11)]
 
@@ -290,7 +430,7 @@ train_mean_2011.ix[(2011, 3, 4):(2011, 3, 11)]
 # ### Weather for 2012
 # ** In 2012 we can't observe any specific outliers. **
 
-# In[21]:
+# In[82]:
 
 plt.figure(figsize=(10,6))
 train_mean_2012['temp'].plot(c='orange')
@@ -302,11 +442,95 @@ plt.legend(loc='best')
 
 # ** In the plot below we can observe clear trend in specific season periods as well as significant rentals increase in 2012 year. **
 
-# In[22]:
+# In[192]:
+
+plot_with_window('atemp')
+
+
+# In[193]:
+
+plot_with_window('atemp_hour_change')
+
+
+# In[201]:
+
+outliers = {}
+
+
+# In[194]:
+
+for col in ['temp',
+'atemp',
+'humidity',
+'windspeed',
+'atemp_temp_diff',             
+'temp_hour_change',            
+'temp_day_change',             
+'temp_next_hour_change',       
+'atemp_hour_change',           
+'atemp_day_change',            
+'atemp_next_hour_change',      
+'humidity_hour_change',        
+'humidity_day_change',         
+'humidity_next_hour_change',   
+'windspeed_hour_change',       
+'windspeed_day_change',        
+'windspeed_next_hour_change']: plot_with_window(col)
+
+
+# In[205]:
+
+for col in ['temp_hour_change',            
+'temp_day_change',             
+'temp_next_hour_change']: 
+    outliers[col] = plot_with_window(col)
+
+
+# In[212]:
+
+all_daily_mean.ix[outliers['temp_day_change'].index.values.tolist()]
+
+
+# In[96]:
 
 plt.figure(figsize=(9,4))
-train_no_dummy.groupby(['year','month','day']).mean()['count'].plot()
-train_no_dummy.groupby(['year','month','day']).mean()['count'].rolling(window=30).mean().plot(label='30 Day Avg', lw=2, ls='--', c='red')
+train_no_dummy.groupby(['year','month','day']).mean()['atemp_day_change'].plot()
+train_no_dummy.groupby(['year','month','day']).mean()['atemp_day_change'].rolling(window=7).mean().plot(label='30 Day Avg', lw=2, ls='--', c='red')
+
+plt.legend(loc='best')
+plt.tight_layout()
+
+
+# In[ ]:
+
+
+
+
+# In[90]:
+
+plt.figure(figsize=(9,4))
+train_no_dummy.groupby(['year','month','day']).mean()['temp'].plot()
+train_no_dummy.groupby(['year','month','day']).mean()['temp'].rolling(window=7).mean().plot(label='30 Day Avg', lw=2, ls='--', c='red')
+
+plt.legend(loc='best')
+plt.tight_layout()
+
+
+# In[93]:
+
+plt.figure(figsize=(9,4))
+train_no_dummy.groupby(['year','month','day']).mean()['humidity'].plot()
+train_no_dummy.groupby(['year','month','day']).mean()['humidity'].rolling(window=14).mean().plot(label='30 Day Avg', lw=2, ls='--', c='red')
+
+plt.legend(loc='best')
+plt.tight_layout()
+
+
+# In[92]:
+
+plt.figure(figsize=(9,4))
+train_no_dummy.groupby(['year','month','day']).mean()['windspeed'].plot()
+train_no_dummy.groupby(['year','month','day']).mean()['windspeed'].rolling(window=7).mean().plot(label='30 Day Avg', lw=2, ls='--', c='red')
 
 plt.legend(loc='best')
 plt.tight_layout()
@@ -314,7 +538,7 @@ plt.tight_layout()
 
 # ** From the boxplot below its clear most bike rentals are  in hours: 8, 17, 18. We should expect that registred users rent bikes in those hours becouse there are almost no outliers. Between those hours there are hours with many outliers. We should expect that more casual users rent bikes in those hours  **
 
-# In[23]:
+# In[ ]:
 
 plt.figure(figsize=(10,6))
 sns.boxplot(x="hour", y="count", data=train_no_dummy)
@@ -323,7 +547,7 @@ plt.tight_layout
 
 # ** On the plots below we can see rentals distribution for specifc month. Druing summer there are most demand for bikes. During all season hour-rental characteristics have the same shape: for working days thera are two peaks on 8 and 17-18 hours. Casual users rent bike usually between those hours as well as during weekends. **
 
-# In[24]:
+# In[ ]:
 
 # below code is taken from https://www.kaggle.com/viveksrinivasan/eda-ensemble-model-top-10-percentile
 
@@ -356,7 +580,7 @@ plt.tight_layout
 
 # ** Let's find out what is distribution curves for dependent variables. Most of the current machine learning algorithmics performs best on normally distributed data. Pure distribution of depednent variables look more to be Poisson than Gaussian. Log transformation can helps a lot in converting data to normal-like distribution. **
 
-# In[25]:
+# In[ ]:
 
 fig,axes= plt.subplots(nrows=3, ncols=2, figsize=(11,10))
 
@@ -370,69 +594,79 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
+# In[ ]:
+
+sns.distplot(train_no_dummy['temp'].interpolate(method='time'))
+
+
 # ** There are not clear linear relationships between variables, besides dependent variables (casual, registerd, count) themselves and temp - atemp.  It indicates that machine learning regression algorithms that can handle non-linearity could perfom better than linear regression.** 
 
-# In[26]:
+# In[ ]:
 
 sns.pairplot(train_no_dummy, vars=continuous_var + dependent_variables, hue='holiday', palette='coolwarm')
 
 
 # ** There is some correlation (showed on some next cells on heatmap) between casual and registred users rentals. **
 
-# In[27]:
+# In[ ]:
 
 sns.pairplot(train_no_dummy, vars=['casual', 'registered'], palette='coolwarm')
 
 
 # ** It's clear linear relationships between temperature in Celsius and "feels like" temperature in Celsius'. We should drop one of them to avoid <a href='https://en.wikipedia.org/wiki/Multicollinearity'> multicollinearity </a> **
 
-# In[28]:
+# In[ ]:
 
 sns.jointplot(x='temp',y='atemp',data=train_no_dummy)
 
 
-# ** There are potentially 24 outliers where absolute difference between temperature in Celsius and "feels like" temperature in Celsius is greater than 10 Celsius degree. We can build another linear regression model to predict atemp for those outliers. But taking into account fact, there are only 24 records, we just simply set zero on atemp_temp_diff variable for those records and we will drop atemp variable as well.** 
+# ** There are potentially 24 outliers where absolute difference between temperature in Celsius and "feels like" temperature in Celsius is greater than 10 Celsius degree. We can build another linear regression model to predict atemp for those outliers. But taking into account fact, there are only 24 records, we just simply set mean() on atemp_temp_diff variable for those records and we will drop atemp variable as well.** 
 
-# In[29]:
+# In[ ]:
 
 sns.jointplot(x='temp',y='atemp_temp_diff',data=train_no_dummy)
 
 
-# In[14]:
+# In[ ]:
 
 train_no_dummy[train_no_dummy['atemp_temp_diff'] < -10]
 
 
-# In[15]:
+# In[ ]:
 
-train_no_dummy.loc[train_no_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = 0
-train_dummy.loc[train_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = 0
+atemp_temp_diff_mean = train_no_dummy[train_no_dummy['atemp_temp_diff'] > -10]['atemp_temp_diff'].mean()
+
+
+# In[ ]:
+
+train_no_dummy.loc[train_no_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
+train_dummy.loc[train_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
 
 
 # ** Verify the results and check whether there are some outliers in test_KAGGLE dataset.**
 
-# In[16]:
+# In[ ]:
 
 train_dummy[train_no_dummy['atemp_temp_diff'] < -10]
 
 
 #  ** Luckly there is no problem with atemp_temp_diff outliers in test_KAGGLE. **
 
-# In[17]:
+# In[ ]:
 
 test_dummy_KAGGLE[train_no_dummy['atemp_temp_diff'] < -10]
 
 
 # ** After 'managing' atemp outliers **
 
-# In[34]:
+# In[ ]:
 
 sns.jointplot(x='temp',y='atemp_temp_diff',data=train_no_dummy) 
 
 
 # ** There is equal proportion of data from each season, only few data is marked as holiday as well as there are only few examples with the worst weather. **
 
-# In[35]:
+# In[ ]:
 
 fig,axes= plt.subplots(nrows=2, ncols=2, figsize=(11,10))
 
@@ -444,14 +678,14 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# In[36]:
+# In[ ]:
 
 train_no_dummy.corr()
 
 
 # ** Heatmap is better visualisation tool to see some Pearson Correlation. There aren't strong correlations: hour and temp variable have approximately 0.4 Pearson Correlation value. **
 
-# In[37]:
+# In[ ]:
 
 fig = plt.figure(figsize=(20,12))
 sns.heatmap(train_no_dummy.corr(), annot=False,cmap='coolwarm')
@@ -460,26 +694,26 @@ plt.tight_layout
 
 # ** We can see that linear regression can give us only roughly approximation of total rentals from hour variable. **
 
-# In[38]:
+# In[ ]:
 
 sns.jointplot(x='hour',y='count',kind='reg',data=train_no_dummy)
 
 
 # ** Temp-Count scatter plot is skewed in right direction which indicates that higher temperature results in higher total bike rentals. But again, we can see it's only roughly approximation. **
 
-# In[39]:
+# In[ ]:
 
 sns.jointplot(x='temp',y='count',kind='reg',data=train_no_dummy)
 
 
-# In[40]:
+# In[ ]:
 
 sns.jointplot(x='temp',y='count',kind='hex',data=train_no_dummy)
 
 
 # ** Let's have a close look on ditribution across different years. **
 
-# In[41]:
+# In[ ]:
 
 train_no_dummy_year_piv = train_no_dummy.pivot_table(values='count',index='month',columns='year').rename(index=monthDict)
 train_no_dummy_year_piv
@@ -487,31 +721,78 @@ train_no_dummy_year_piv
 
 # ** It looks like there are much more rentals in 2012 than in 2011. Perhaps there were more bikes to rent in 2012 than in 2011. Another reason could be fact that people got used to rent a bike from Capital BikeShare and there were more registred users in total. **
 
-# In[42]:
+# In[ ]:
 
 fig = plt.figure(figsize=(7,5))
 sns.heatmap(train_no_dummy_year_piv,cmap='coolwarm')
 
 
-# In[43]:
+# In[ ]:
 
 train_no_dummy_month_piv = train_no_dummy.pivot_table(values='count',index='hour',columns='month').rename(columns=monthDict)
 
 
-# ** We can clearly see that from May to October there are most bike rentals.  **
+# ** We can clearly see that from April to November there is a bike season.  **
 
-# In[44]:
+# In[ ]:
 
 fig = plt.figure(figsize=(11,8))
 sns.heatmap(train_no_dummy_month_piv,cmap='coolwarm')
 
 
-# ** Hours 19, 16, 8 and 17-18 have the most amount of rentals. ** 
+# In[ ]:
 
-# In[45]:
+train_no_dummy_workingday_piv = train_no_dummy.pivot_table(values='count',index='hour',columns='workingday')
 
-sns.clustermap(train_no_dummy_month_piv,cmap='coolwarm',standard_scale=1)
 
+# In[ ]:
+
+sns.clustermap(train_no_dummy_workingday_piv,cmap='coolwarm',standard_scale=1,method='weighted')
+
+
+# ** From the plot clustermap above we can devide hours into 8 categories: **
+# <ol>
+# <li>(0-6) + 23</li>
+# <li>(7-8), workingday = 0</li>
+# <li>(7-8), workingday = 1</li>
+# <li>(20-22) + 9</li>
+# <li>(10-16), workingday = 0</li>
+# <li>(10-16), workingday = 1</li>
+# <li>(17-18), workingday = 0</li>
+# <li>(17-18), workingday = 1</li>
+# </ol>
+# 
+# We added those categories in variable **hour_cat.**
+
+# In[ ]:
+
+train_no_dummy_year_temp_piv = train_no_dummy.round().pivot_table(values='count',index='temp',columns='workingday').dropna()
+
+
+# In[ ]:
+
+sns.clustermap(train_no_dummy_year_temp_piv,cmap='coolwarm',standard_scale=1,method='average')
+
+
+# ** From the plot clustermap above we can devide rounded temp into categories: **
+# <ul>
+# <li>13-19</li>
+# <li> >= 39</li>
+# <li> < 2</li>
+# <li>25-27</li>
+# <li>20-23, 28</li>
+# <li>24,29</li>
+# <li>7-10</li>
+# <li>11-12</li>
+# <li>2, 4-6</li>
+# <li>3</li>
+# <li>30,32</li>
+# <li>31,33,34,36</li>
+# <li>35</li>
+# <li>37-38</li>
+# </ul>
+# 
+# We added those categories in variable ** temp_cat. **
 
 # ___
 # # 4. Training and Testing Data
@@ -546,7 +827,7 @@ sns.clustermap(train_no_dummy_month_piv,cmap='coolwarm',standard_scale=1)
 # All of these are **loss functions**, because we want to minimize them.
 # ___
 
-# In[18]:
+# In[ ]:
 
 def evaluatorMAE_own(predictions, labelCol):
     diff = np.abs(predictions[labelCol] - predictions['prediction'])
@@ -601,28 +882,32 @@ def evaluateMetrics(predictions, labelCol, rollback=True, rounded=True):
 
 # ** Drop unnecessary added category variables from training dataset. Apache Spark needs all data to be numerical. We use 'day' variable taking into account that there will be different range of this variable in train and test set, but study showed that droping this variable didn't increase the results. We drop atemp and leave temp to avoid multicollinearity. **
 
-# In[19]:
+# In[ ]:
 
-train_dummy_final = train_dummy.drop(added_cat_var + dependent_variables + ['atemp'], axis=1).copy()
-train_no_dummy_final = train_no_dummy.drop(added_cat_var + dependent_variables + ['atemp'], axis=1).copy()
+# drop_regularization = ['atemp','atemp_hour_change', 'atemp_day_change', \
+#                        'windspeed','windspeed_hour_change', 'windspeed_day_change']
+#drop_regularization = ['holiday', 'atemp', 'windspeed', 'temp_day_change', 'atemp_hour_change', 'atemp_day_change', 'windspeed_hour_change', 'atemp_temp_diff']
+drop_regularization = []
+train_dummy_final = train_dummy.drop(added_cat_var + dependent_variables + drop_regularization, axis=1).copy()
+train_no_dummy_final = train_no_dummy.drop(added_cat_var + dependent_variables + drop_regularization , axis=1).copy()
 
-test_dummy_KAGGLE_final = test_dummy_KAGGLE.drop(added_cat_var + ['atemp'], axis=1).copy()
-test_no_dummy_KAGGLE_final = test_no_dummy_KAGGLE.drop(added_cat_var + ['atemp'], axis=1).copy()
+test_dummy_KAGGLE_final = test_dummy_KAGGLE.drop(added_cat_var + drop_regularization, axis=1).copy()
+test_no_dummy_KAGGLE_final = test_no_dummy_KAGGLE.drop(added_cat_var + drop_regularization , axis=1).copy()
 
 
 # ** Split trainind data into train and "test" to evaluate our models. Final model will predict labels for test_KAGGLE datasets. **
 
-# In[20]:
+# In[ ]:
 
 from sklearn.model_selection import train_test_split
 
-(trainingData_dummy, testData_dummy) = train_test_split(train_dummy_final, test_size=0.3, random_state=101)
-(trainingData_no_dummy, testData_no_dummy) = train_test_split(train_no_dummy_final, test_size=0.3, random_state=101)
+(trainingData_dummy, testData_dummy) = train_test_split(train_dummy_final, test_size=0.2, random_state=101)
+(trainingData_no_dummy, testData_no_dummy) = train_test_split(train_no_dummy_final, test_size=0.2, random_state=101)
 
 
 # ** Create Apache Spark Data Frames ** 
 
-# In[21]:
+# In[ ]:
 
 spark_train_dummy = SqlContext.createDataFrame(trainingData_dummy)
 spark_test_dummy = SqlContext.createDataFrame(testData_dummy)
@@ -633,7 +918,7 @@ spark_test_no_dummy = SqlContext.createDataFrame(testData_no_dummy)
 
 # ** Prepare Kaggle test data. **
 
-# In[22]:
+# In[ ]:
 
 spark_Kaggle_test_dummy = SqlContext.createDataFrame(test_dummy_KAGGLE_final)
 spark_Kaggle_test_no_dummy = SqlContext.createDataFrame(test_no_dummy_KAGGLE_final)
@@ -643,13 +928,13 @@ spark_Kaggle_test_no_dummy = SqlContext.createDataFrame(test_no_dummy_KAGGLE_fin
 # ## 4.2 Format input data for machine learning
 # ** Apache Spark Machine Learning lib requires input as data frame transformed to labeled point. **
 
-# In[23]:
+# In[ ]:
 
 from pyspark.ml.linalg import Vectors
 DUMMY = True
 
 
-# In[24]:
+# In[ ]:
 
 dummy_cols = spark_train_dummy.columns
 no_dummy_cols = spark_train_no_dummy.columns
@@ -658,7 +943,7 @@ kaggle_dummy_cols = spark_Kaggle_test_dummy.columns
 kaggle_no_dummy_cols = spark_Kaggle_test_no_dummy.columns
 
 
-# In[25]:
+# In[ ]:
 
 def transformToLabeledPoint(row) :
     retArray=[]
@@ -681,7 +966,7 @@ def transformToLabeledPoint(row) :
     return label_count, label_registered, label_casual, Vectors.dense(retArray)
 
 
-# In[26]:
+# In[ ]:
 
 def transformToLabeledPointKaggle(row) :
     retArray=[]
@@ -700,9 +985,66 @@ def transformToLabeledPointKaggle(row) :
     return datetime,0,0, Vectors.dense(retArray)
 
 
+# In[ ]:
+
+"""-------------------------------------------------------------------------------
+Hypothesis Test Using Pearson’s Chi-squared Test Algorithm // Spark2 MLLib only
+-------------------------------------------------------------------------------"""
+from pyspark.mllib.regression import LabeledPoint
+from pyspark.mllib.stat import Statistics
+from pyspark.mllib.linalg import Matrices, Vectors
+
+DUMMY = False
+def transformToLabeledPointMLLib(row) :
+    
+    retArray=[]
+    if (DUMMY):
+        spark_col = dummy_cols
+    else:
+        spark_col = no_dummy_cols
+    
+    # remove dependent variables (before log transformation) from the middle of independent variables
+    spark_col = [x for x in spark_col if x not in dependent_variables]
+    
+    # 3 last items are dependent variables
+    for col in spark_col[:-3]:
+        retArray.append(row[col])
+        
+    label_count = row["count_log"]
+    label_registered = row["registered_log"]
+    label_casual = row["casual_log"]
+    
+    #For verification if p-value for label itsefl is zero:
+    #retArray.append(int(float(row["count_log"]))) 
+    retArray.append(row["count_log"])
+
+    lp = LabeledPoint(row["count_log"], retArray)
+    return lp
+
+
+unionLpMLLib = spark_train_no_dummy.unionAll(spark_test_no_dummy).rdd.map(transformToLabeledPointMLLib)  
+
+featureTestResults = Statistics.chiSqTest(unionLpMLLib)
+
+
+for i, result in enumerate(featureTestResults):
+    print("Column %d:\n%s" % (i + 1, result))
+
+
+# In[ ]:
+
+for i in range(0,len(featureTestResults)):
+    print(no_dummy_cols[i] + ": " + str(round(featureTestResults[i].pValue,4)))
+
+
+# In[ ]:
+
+no_dummy_cols
+
+
 # ** Preparation Apache Spark data frame for linear regression **
 
-# In[27]:
+# In[ ]:
 
 DUMMY = True
 trainingData_dummy = SqlContext.createDataFrame(spark_train_dummy.rdd.map(transformToLabeledPoint), ["label_count", "label_registered", "label_casual", "features"])
@@ -710,9 +1052,14 @@ testData_dummy = SqlContext.createDataFrame(spark_test_dummy.rdd.map(transformTo
 testKaggle_dummy = SqlContext.createDataFrame(spark_Kaggle_test_dummy.rdd.map(transformToLabeledPointKaggle), ["label_count", "label_registered", "label_casual", "features"])
 
 
+# In[ ]:
+
+train_no_dummy.info()
+
+
 # ** Preparation Apache Spark data frame for random forest and gradient boosted regression. No need for dummy variables. **
 
-# In[28]:
+# In[ ]:
 
 DUMMY = False
 trainingData_no_dummy = SqlContext.createDataFrame(spark_train_no_dummy.rdd.map(transformToLabeledPoint), ["label_count", "label_registered", "label_casual", "features"])
@@ -722,7 +1069,7 @@ testKaggle_no_dummy = SqlContext.createDataFrame(spark_Kaggle_test_no_dummy.rdd.
 
 # ** Cache spark data frames into memory for faster computation **
 
-# In[29]:
+# In[ ]:
 
 trainingData_dummy.cache()
 trainingData_dummy.count()
@@ -730,7 +1077,7 @@ trainingData_no_dummy.cache()
 trainingData_no_dummy.count()
 
 
-# In[30]:
+# In[ ]:
 
 testData_dummy.cache()
 testData_dummy.count()
@@ -738,7 +1085,7 @@ testData_no_dummy.cache()
 testData_no_dummy.count()
 
 
-# In[31]:
+# In[ ]:
 
 testKaggle_dummy.cache()
 testKaggle_dummy.count()
@@ -747,17 +1094,17 @@ testKaggle_no_dummy.count()
 
 
 # ___
-# ## 4.3 K-Fold Cross Validation
-# 
+# ## 4.3 Function definitions
 # ** Now its time to train and tune our model on training data using k-fold cross validation method! **
 # 
 
-# In[32]:
+# In[ ]:
 
 from pyspark.ml import Pipeline
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml.regression import LinearRegression
+from pyspark.ml.regression import DecisionTreeRegressor
 from pyspark.ml.regression import RandomForestRegressor
 from pyspark.ml.regression import GBTRegressor
 from pyspark.ml.feature import VectorIndexer
@@ -765,9 +1112,9 @@ from pyspark.ml.feature import VectorIndexer
 
 # ** As mentioned before, LinearRegression for good performance needs data with dummy variables. **
 
-# In[54]:
+# In[ ]:
 
-def train_and_fit(models_dict, dummy=False, Kaggle=False):
+def make_prediction(models_dict, dummy=False, Kaggle=False):
  
     # Kaggle test data is used only with no_dummy
     if (dummy):
@@ -790,7 +1137,7 @@ def train_and_fit(models_dict, dummy=False, Kaggle=False):
 
 # ** Function for evaluation metrics, support both functionalities: rounded predictions and not. **
 
-# In[34]:
+# In[ ]:
 
 def evaluate_prediction(predictionsTestData_r, predictionsTestData_c, predictionsTestData_count, rounded=False):
     print("Evaluation prediction for registred users:")
@@ -834,7 +1181,7 @@ def evaluate_prediction(predictionsTestData_r, predictionsTestData_c, prediction
 
 # ** Function for mixing predictions from two different models together with respect to specifc ratio rate. **
 
-# In[35]:
+# In[ ]:
 
 def evaluate_mixed_prediction(rf_pred_dict, bgtr_pred_dict, ratio=0.5, rounded=False):
     print("Evaluation mixed (ratio=" + str(ratio) + ") prediction for registred users:")
@@ -867,7 +1214,7 @@ def evaluate_mixed_prediction(rf_pred_dict, bgtr_pred_dict, ratio=0.5, rounded=F
 
 # ** Function for final prediction for Kaggle test dataset. Support mixing prediction with specific ratio. Final sum of predictions is rounded. **
 
-# In[36]:
+# In[ ]:
 
 def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,                         gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, ratio=0.5):
     
@@ -896,15 +1243,16 @@ def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,     
     pandas_pred_sum = rf_pandas_pred_r.copy()
     pandas_pred_sum['count'] = 0.0
     pandas_pred_sum['count'] = ratio * (rf_pandas_pred_r['prediction'] + rf_pandas_pred_c['prediction']) +                                 (1.0 - ratio) * (gbtr_pandas_pred_r['prediction'] + gbtr_pandas_pred_c['prediction'])
-    # pandas_pred_sum['count'] = np.round(pandas_pred_sum['count']).astype(int)
-    # truncated prediction gave us slightly better results than rounded
-    pandas_pred_sum['count'] = pandas_pred_sum['count'].astype(int)
+    pandas_pred_sum['count'] = np.round(pandas_pred_sum['count']).astype(int)
+    # other option to truncate floating point number instead of round
+    # pandas_pred_sum['count'] = pandas_pred_sum['count'].astype(int)
     
     return pandas_pred_sum.rename(columns={"label_count": "datetime"})[['datetime','count']]
 
 
 # ___
-# ##  4.4 Linear Regression
+# # 4.4 K-Fold Cross Validation
+# ##  4.4.1 Linear Regression
 # We now treat the Pipeline as an Estimator, wrapping it in a CrossValidator instance. This will allow us to jointly choose parameters for all Pipeline stages. A CrossValidator requires an Estimator, a set of Estimator ParamMaps, and an Evaluator. We use a ParamGridBuilder to construct a grid of parameters to search over. 
 
 # <table class="table">
@@ -929,9 +1277,9 @@ def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,     
 # Here sign(w) is the vector consisting of the signs (±1) of all the entries of $w$.
 # L2-regularized problems are generally easier to solve than L1-regularized due to smoothness. However, L1 regularization can help promote sparsity in weights leading to smaller and more interpretable models, the latter of which can be useful for feature selection. Elastic net is a combination of L1 and L2 regularization. It is not recommended to train models without any regularization, especially when the number of training examples is small.
 
-# In[66]:
+# In[ ]:
 
-lr = LinearRegression()
+lr = LinearRegression(maxIter=1000)
 
 lr_cv_models_dict = {}
 
@@ -951,7 +1299,9 @@ for label in ['label_registered','label_casual', 'label_count']:
     
     start = time.time()
     # Run cross-validation, and choose the best set of parameters on dummy dataset.
-    cvModel = crossval.fit(trainingData_dummy)
+    # trainingData_dummy + testData_dummy = whole Kaggle Train data, we separarated this sets to simply evaluate models
+    # we cross-validate on whole Kaggle train data to find best params to predict whole Kaggle Test set
+    cvModel = crossval.fit(trainingData_dummy.unionAll(testData_dummy))
     print("======= CV for " + label + " =========")
     end = time.time()
     
@@ -967,18 +1317,18 @@ for label in ['label_registered','label_casual', 'label_count']:
 # 
 # Now that we have fit our model, let's evaluate its performance by predicting off the test values with the best values from cross validation!.
 
-# In[67]:
+# In[ ]:
 
-lr = LinearRegression(regParam=0.00001, elasticNetParam=0.5, maxIter=100)
+# lr = LinearRegression(regParam=0.00001, elasticNetParam=0.75, maxIter=1000)
 
-for label in ['label_registered','label_casual', 'label_count']: 
-    model = lr.setLabelCol(label).fit(trainingData_dummy)
-    lr_cv_models_dict[label] = model
+# for label in ['label_registered','label_casual', 'label_count']: 
+#     model = lr.setLabelCol(label).fit(trainingData_dummy)
+#     lr_cv_models_dict[label] = model
 
 
-# In[68]:
+# In[ ]:
 
-lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count = train_and_fit(lr_cv_models_dict, dummy=True)
+lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count = make_prediction(lr_cv_models_dict, dummy=True)
 
 
 # 
@@ -986,12 +1336,12 @@ lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count
 # Let's evaluate our model performance by calculating the evaluation metrics.
 #  Calculate the Mean Absolute Error, Mean Squared Error, Root Mean Squared Error, and the Root Mean Squared Log Error . Refer cell above for the formulas.
 
-# In[69]:
+# In[ ]:
 
 lr_pred_dict = evaluate_prediction(lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count)
 
 
-# In[71]:
+# In[ ]:
 
 coefficients = pd.DataFrame(LinearRegression(regParam=0.00001, elasticNetParam=0.75, maxIter=100)                            .setLabelCol('label_count').fit(trainingData_dummy).coefficients.array,dummy_cols[:-3])
 coefficients.columns = ['Coefficient']
@@ -999,9 +1349,9 @@ coefficients.columns = ['Coefficient']
 
 # ** Hour variables have the biggest coefficients values in linera regression equation. Amongs them, peak hours have the biggest one. **
 
-# In[72]:
+# In[ ]:
 
-plt.figure(figsize=(12,12))
+plt.figure(figsize=(12,20))
 sns.heatmap(coefficients, cmap='coolwarm')
 
 
@@ -1010,7 +1360,7 @@ sns.heatmap(coefficients, cmap='coolwarm')
 # Let's quickly explore the residuals to make sure everything was okay with our data. 
 # It's good idea to plot a histogram of the residuals and make sure it looks normally distributed.
 
-# In[73]:
+# In[ ]:
 
 plt.scatter(lr_pred_dict['sum']['label_count'],lr_pred_dict['sum']['prediction'])
 plt.xlabel('Y Test')
@@ -1020,14 +1370,14 @@ plt.title('Linear Regression')
 
 # ** Create a scatterplot of the real test values versus the predicted values. **
 
-# In[74]:
+# In[ ]:
 
 sns.distplot((lr_pred_dict['sum']['label_count'] - lr_pred_dict['sum']['prediction']),bins=50);
 plt.xlabel('Linear Regression Residuals')
 
 
 # ___
-# ## 4.5 Random Forest
+# ## 4.4.2 Random Forest
 # Random forests are ensembles of decision trees. Random forests are one of the most successful machine learning models for classification and regression. They combine many decision trees in order to reduce the risk of overfitting. Like decision trees, random forests handle categorical features, extend to the multiclass classification setting, do not require feature scaling, and are able to capture non-linearities and feature interactions.
 # <h3 id="basic-algorithm">Basic algorithm</h3>
 # 
@@ -1047,50 +1397,55 @@ plt.xlabel('Linear Regression Residuals')
 
 # In[ ]:
 
-model = RandomForestRegressor()
+# model = RandomForestRegressor(featuresCol="indexedFeatures")
 
-numTrees = [30, 50, 100]
-maxDepth =  [15, 20, 25, 30]
+# numTrees = [30, 50, 100]
+# maxDepth =  [15, 20, 25, 30]
 
-rf_cv_models_dict = {}
+# rf_cv_models_dict = {}
 
-# Automatically identify categorical features, and index them.
-# Set maxCategories so features with > 31 distinct values are treated as continuous.
-featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
+# # Automatically identify categorical features, and index them.
+# # Set maxCategories so features with > maxCategories distinct values are treated as continuous.
+# featureIndexer =\
+#     VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
     
-pipeline = Pipeline(stages=[featureIndexer, model])
+# pipeline = Pipeline(stages=[featureIndexer, model])
 
-for label in ['label_registered','label_casual', 'label_count']: 
-    paramGrid = ParamGridBuilder()         .addGrid(model.numTrees, numTrees)         .addGrid(model.maxDepth, maxDepth)         .addGrid(model.labelCol, [label])         .build()
+# for label in ['label_registered','label_casual', 'label_count']: 
+#     paramGrid = ParamGridBuilder() \
+#         .addGrid(model.numTrees, numTrees) \
+#         .addGrid(model.maxDepth, maxDepth) \
+#         .addGrid(model.labelCol, [label]) \
+#         .build()
 
-    crossval = CrossValidator(estimator=pipeline,
-                              estimatorParamMaps=paramGrid,
-                              evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
-                              numFolds=5)  # (5x5)x5 = 125 models to check
+#     crossval = CrossValidator(estimator=pipeline,
+#                               estimatorParamMaps=paramGrid,
+#                               evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
+#                               numFolds=5)  # (5x5)x5 = 125 models to check
     
-    start = time.time()
-    cvModel = crossval.fit(trainingData_no_dummy)
-    print("======= CV for " + label + " =========")
-    end = time.time()
-    print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
+#     start = time.time()
+#     cvModel = crossval.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
+#     print("======= CV for " + label + " =========")
+#     end = time.time()
+#     print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
     
-    bestModel = cvModel.bestModel.stages[0]._java_obj
-    print("NumTrees: " + str(bestModel.getNumTrees()))
-    print("MaxDepth: "   + str(bestModel.getMaxDepth()))
-    rf_cv_models_dict[label] = cvModel
-    print()
+#     bestModel = cvModel.bestModel.stages[0]._java_obj
+#     print("NumTrees: " + str(bestModel.getNumTrees()))
+#     print("MaxDepth: "   + str(bestModel.getMaxDepth()))
+#     rf_cv_models_dict[label] = cvModel
+#     print()
 
 
 # ** Create models with params from k-fold cross validation **
 
-# In[75]:
+# In[ ]:
 
 # featureIndexer est has to be fitted to all data (train and test) in order to work properly
 
-featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
+featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=24).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
     
+#rfr = RandomForestRegressor(numTrees=1000, maxDepth=15, maxBins=32, featuresCol="indexedFeatures")
 rfr = RandomForestRegressor(numTrees=50, maxDepth=30)
-
 rf_cv_models_dict = {}
 
 for label in ['label_registered','label_casual', 'label_count']: 
@@ -1099,13 +1454,13 @@ for label in ['label_registered','label_casual', 'label_count']:
     rf_cv_models_dict[label] = model
 
 
-# In[76]:
+# In[ ]:
 
-rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = train_and_fit(rf_cv_models_dict, dummy=False, indexer=featureIndexer)
+rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = make_prediction(rf_cv_models_dict, dummy=False)
 rf_pred_dict = evaluate_prediction(rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count)
 
 
-# In[77]:
+# In[ ]:
 
 plt.scatter(rf_pred_dict['sum']['label_count'],rf_pred_dict['sum']['prediction'])
 plt.xlabel('Y Test')
@@ -1113,14 +1468,14 @@ plt.ylabel('Predicted Y')
 plt.title('Random Forest Regression')
 
 
-# In[78]:
+# In[ ]:
 
 sns.distplot((rf_pred_dict['sum']['label_count'] - rf_pred_dict['sum']['prediction']),bins=50);
 plt.xlabel('Random Forest Regression Residuals')
 
 
 # ___
-# ## 4.6 Gradient-boosted tree regression
+# ## 4.4.3 Gradient-boosted tree regression
 # Gradient-Boosted Trees (GBTs) are ensembles of decision trees. GBTs iteratively train decision trees in order to minimize a loss function. Like decision trees, GBTs handle categorical features, extend to the multiclass classification setting, do not require feature scaling, and are able to capture non-linearities and feature interactions.
 # 
 # <h3> Gradient-Boosted Trees vs. Random Forests</h3>
@@ -1141,46 +1496,52 @@ plt.xlabel('Random Forest Regression Residuals')
 
 # In[ ]:
 
-model = GBTRegressor(maxMemoryInMB=1024, maxBins=128, maxIter=150, cacheNodeIds=True, checkpointInterval=200)
+# model = GBTRegressor(maxMemoryInMB=1024, maxBins=128, maxIter=150, cacheNodeIds=True, checkpointInterval=200, featuresCol="indexedFeatures")
 
-minInstancesPerNode =  [7,8,9,10,11,12]
-maxDepth =  [4,5,6,7]
-gbtr_cv_models_dict = {}
+# minInstancesPerNode =  [7,8,9,10,11,12]
+# maxDepth =  [4,5,6,7]
+# gbtr_cv_models_dict = {}
 
-# Automatically identify categorical features, and index them.
-# Set maxCategories so features with > 31 distinct values are treated as continuous.
-featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy))
+# # Automatically identify categorical features, and index them.
+# # Set maxCategories so features with > maxCategories distinct values are treated as continuous.
+# featureIndexer =\
+#     VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy))
     
 
-pipeline = Pipeline(stages=[featureIndexer, model])
+# pipeline = Pipeline(stages=[featureIndexer, model])
 
-for label in ['label_registered','label_casual', 'label_count']: 
-    paramGrid = ParamGridBuilder()         .addGrid(model.minInstancesPerNode, minInstancesPerNode)         .addGrid(model.maxDepth, maxDepth)         .addGrid(model.labelCol, [label])         .build()
+# for label in ['label_registered','label_casual', 'label_count']: 
+#     paramGrid = ParamGridBuilder() \
+#         .addGrid(model.minInstancesPerNode, minInstancesPerNode) \
+#         .addGrid(model.maxDepth, maxDepth) \
+#         .addGrid(model.labelCol, [label]) \
+#         .build()
 
-    crossval = CrossValidator(estimator=pipeline,
-                              estimatorParamMaps=paramGrid,
-                              evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
-                              numFolds=4)  # (5x5)x5 = 125 models to check
+#     crossval = CrossValidator(estimator=pipeline,
+#                               estimatorParamMaps=paramGrid,
+#                               evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
+#                               numFolds=4)  # (5x5)x5 = 125 models to check
     
-    start = time.time()
-    cvModel = crossval.fit(trainingData_no_dummy)
-    print("======= CV for " + label + " =========")
-    end = time.time()
-    print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
+#     start = time.time()
+#     cvModel = crossval.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
+#     print("======= CV for " + label + " =========")
+#     end = time.time()
+#     print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
     
-    bestModel = cvModel.bestModel.stages[0]._java_obj
-    print("MinInstancesPerNode: " + str(bestModel.getMinInstancesPerNode()))
-    print("MaxDepth: "   + str(bestModel.getMaxDepth()))
-    gbtr_cv_models_dict[label] = cvModel
-    print()
+#     bestModel = cvModel.bestModel.stages[0]._java_obj
+#     print("MinInstancesPerNode: " + str(bestModel.getMinInstancesPerNode()))
+#     print("MaxDepth: "   + str(bestModel.getMaxDepth()))
+#     gbtr_cv_models_dict[label] = cvModel
+#     print()
 
 
-# In[84]:
+# In[ ]:
 
 # featureIndexer est has to be fitted to all data (train and test) in order to work properly
 
-featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=31).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
+featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=24).fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
     
+#gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxMemoryInMB=512, maxBins=32, maxIter=150, subsamplingRate=0.7, featuresCol="indexedFeatures")
 gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxMemoryInMB=512, maxBins=128, maxIter=150)
 
 gbtr_cv_models_dict = {}
@@ -1191,13 +1552,13 @@ for label in ['label_registered','label_casual', 'label_count']:
     gbtr_cv_models_dict[label] = model
 
 
-# In[85]:
+# In[ ]:
 
-gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, gbtr_predictionsTestData_count = train_and_fit(gbtr_cv_models_dict, dummy=False, indexer=featureIndexer)
+gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, gbtr_predictionsTestData_count = make_prediction(gbtr_cv_models_dict, dummy=False)
 gbtr_pred_dict = evaluate_prediction(gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, gbtr_predictionsTestData_count)
 
 
-# In[86]:
+# In[ ]:
 
 plt.scatter(gbtr_pred_dict['sum']['label_count'],gbtr_pred_dict['sum']['prediction'])
 plt.xlabel('Y Test')
@@ -1205,7 +1566,7 @@ plt.ylabel('Predicted Y')
 plt.title('Gradient Boosted Tree Regression')
 
 
-# In[103]:
+# In[ ]:
 
 sns.distplot((gbtr_pred_dict['sum']['label_count'] - gbtr_pred_dict['sum']['prediction']),bins=50);
 plt.xlabel('Gradient Boosted Tree Regression Residuals')
@@ -1329,44 +1690,34 @@ plt.xlabel('Gradient Boosted Tree Regression Residuals')
 #   </tr>
 # </table>
 # 
-# ** So it's good idea to combine prediction from two best machine learning algorithms: Random Forest Regression and Gradient Boosted Regression in similar proportion 1 : 4**
+# ** So it's good idea to combine prediction from two best machine learning algorithms: Random Forest Regression and Gradient Boosted Regression **
 
-# In[88]:
+# ** We need to plot curve ratio to RMSLE to verify the split proportion **
 
-train_no_dummy.describe()[['registered','casual']]
-
-
-# ** Verify the split proportion **
-
-# In[89]:
-
-'%.2f' % (train_no_dummy.describe().ix['mean','casual'] / train_no_dummy.describe().ix['mean','registered'])
-
-
-# In[90]:
+# In[ ]:
 
 rmsle_list = []
-ratio_array = np.linspace(0.1,1,10)
+ratio_array = np.linspace(0.05,1,20)
 
 for ratio in ratio_array:
     rmsle_list.append(evaluate_mixed_prediction(rf_pred_dict, gbtr_pred_dict, ratio=float(ratio))['rmsle_sum'])
 
 
-# ** We can see that truly split proportion around 0.2 - 0.3 gives us best result. **
+# ** We can see that  split proportion around 0.3 gives us best result. **
 
-# In[91]:
+# In[ ]:
 
-plt.plot(np.linspace(0.1,1,10), rmsle_list)
+plt.plot(ratio_array, rmsle_list)
 plt.xlabel('Ratio')
 plt.ylabel('RMSLE')
 plt.title('Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
 
 
-# ### Final best result on 'testing' data is ** 0.3 ** 
+# ### Final best result on 'testing' data is ** 0.289 ** 
 
-# In[94]:
+# In[ ]:
 
-'%.2f' % min(rmsle_list)
+'%.3f' % min(rmsle_list)
 
 
 # ___
@@ -1374,22 +1725,25 @@ plt.title('Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
 
 # ** Get the best ratio split. **
 
-# In[48]:
+# In[ ]:
 
 #best_ratio = float(ratio_array[rmsle_list.index(min(rmsle_list))])
 best_ratio = float(0.3)
 
 
-# In[40]:
+# In[ ]:
 
 # featureIndexer has to be fitted to all data (train and test) in order to work properly
 featureIndexer =    VectorIndexer(inputCol="features", outputCol="indexedFeatures", maxCategories=24)    .fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
 
 
-# In[41]:
+# ** Previous models were trained on 0.8 part of whole train data set. Now we need to train on whole dataset with chosen params. **
+
+# In[ ]:
 
 # model params taken from previous cv 
-rfr = RandomForestRegressor(numTrees=50, maxDepth=30)
+#rfr = RandomForestRegressor(numTrees=1000, maxDepth=15, maxBins=32, featuresCol="indexedFeatures")
+rfr = RandomForestRegressor(numTrees=100, maxDepth=20)
 rf_cv_models_dict_final = {}
 
 for label in ['label_registered','label_casual', 'label_count']: 
@@ -1398,9 +1752,10 @@ for label in ['label_registered','label_casual', 'label_count']:
     rf_cv_models_dict_final[label] = model
 
 
-# In[42]:
+# In[ ]:
 
 # model params taken from previous cv 
+#gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxMemoryInMB=512, maxBins=32, maxIter=150, subsamplingRate=0.7, featuresCol="indexedFeatures")
 gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxMemoryInMB=512, maxBins=128, maxIter=150)
 gbtr_cv_models_dict_final = {}
 
@@ -1410,30 +1765,30 @@ for label in ['label_registered','label_casual', 'label_count']:
     gbtr_cv_models_dict_final[label] = model
 
 
+# In[ ]:
+
+gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, gbtr_predictionsTestData_count = make_prediction(gbtr_cv_models_dict_final, dummy=False, Kaggle=True)
+rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = make_prediction(rf_cv_models_dict_final, dummy=False, Kaggle=True)
+
+
 # ** Get 'raw' prediction on Kaggle test dataset from best two models: Random Forest Regression and Gradient Boosted Regression Tree. ** 
 
-# In[55]:
-
-gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, gbtr_predictionsTestData_count = train_and_fit(gbtr_cv_models_dict_final, dummy=False, Kaggle=True)
-rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = train_and_fit(rf_cv_models_dict_final, dummy=False, Kaggle=True)
-
-
-# In[56]:
+# In[ ]:
 
 kaggleSubmission = predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,                                         gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, ratio = best_ratio)
 
 
-# In[58]:
+# In[ ]:
 
 kaggleSubmission.head(10)
 
 
-# In[46]:
+# In[ ]:
 
 kaggleSubmission.info()
 
 
-# In[59]:
+# In[ ]:
 
 kaggleSubmission.to_csv('kaggleSubmission.csv', index=False)
 
@@ -1449,4 +1804,4 @@ kaggleSubmission.to_csv('kaggleSubmission.csv', index=False)
 #     <li> Use another regression models like Deep Neural Networks for regression </li>
 # </ul>
 
-# ## Final result from Kaggle submission is 0.418, good work :-)
+# ## Final result from Kaggle submission is 0.42, good work :-)
