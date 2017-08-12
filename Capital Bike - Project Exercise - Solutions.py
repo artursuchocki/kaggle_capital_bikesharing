@@ -22,7 +22,7 @@
 
 # ** Import Apache Spark 2.1libraries and setup environment variables. In case for cluster deployment you should probably remove this cell. **
 
-# In[1]:
+# In[435]:
 
 import os
 import sys
@@ -43,7 +43,7 @@ sys.path.insert(0,os.path.join(SPARK_HOME,"python","lib","py4j-0.10.4-src.zip"))
 
 # ** Initialize Spark Context for driver program **
 
-# In[2]:
+# In[436]:
 
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext
@@ -61,7 +61,7 @@ SpContext = SpContext.setCheckpointDir("checkpoint")
 
 # ** Import pandas, numpy, matplotlib,and seaborn. Then set %matplotlib inline **
 
-# In[34]:
+# In[437]:
 
 import pandas as pd
 import numpy as np
@@ -69,6 +69,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 get_ipython().magic('matplotlib inline')
 pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', 100)
 
 
 # ___
@@ -98,12 +99,12 @@ pd.set_option('display.max_columns', None)
 
 # ** Read in the Customers Bike Rental csv train and test files as a Pandas DataFrame.**
 
-# In[4]:
+# In[438]:
 
 train_df = pd.read_csv("train.csv")
 
 
-# In[5]:
+# In[439]:
 
 test_df = pd.read_csv("test.csv")
 
@@ -112,29 +113,34 @@ test_df = pd.read_csv("test.csv")
 
 # ** We will try both methods: predict amount of casual and regitered rentals separately and predict sum of those (count) **
 
-# In[6]:
+# In[440]:
 
 train_df.head()
 
 
-# In[7]:
+# In[441]:
 
 test_df.head()
 
 
-# ** Check out customers rental info() and describe() methods. Thera are total 10866 entries, none of the column has missing values**
+# ** Check out customers rental info() and describe() methods. Thera are total 10866 entries for traing data and 6493 entries for test data, none of the column has missing values**
 
-# In[8]:
+# In[442]:
 
 train_df.info()
 
 
-# In[9]:
+# In[443]:
+
+test_df.info()
+
+
+# In[444]:
 
 continuous_var = ['temp', 'atemp', 'humidity', 'windspeed'] 
 
 # exclude binary variables
-categorical_var=['season','weather','year','month','hour','dayofweek','hour_cat', 'temp_cat']
+categorical_var=['season','weather','year','month','hour','dayofweek','weekofyear','quarter','hour_cat', 'temp_cat']
 
 dependent_variables = ['casual', 'registered', 'count']
 
@@ -147,9 +153,11 @@ dayofweekDict = {0: "Monday", 1 : "Tuesday", 2 : "Wednesday", 3 :"Thursday" ,   
 weatherDict = {1: "Clear", 2 : "Mist", 3 : "Light_Snow", 4 :"Heavy_Rain" }
 
 
-# ** Data preparation part: parse data timestamp, add dummy and derivated variables.**
+# ** Data preparation part: parse data timestamp, add dummy and derivated variables. For data including categorical variables with different number of levels, random forests are biased in favor of those attributes with more levels. So it's good idea to have categorical variables with similar level of unique values. ** 
+# 
+# **Lot's of data from the function below are taken in next section of Exploratory Data Analysis, like rental peak hours.**
 
-# In[10]:
+# In[452]:
 
 def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = False):
     
@@ -168,16 +176,31 @@ def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = Fa
     
     customers_rental['atemp_temp_diff'] = customers_rental['atemp'] - customers_rental['temp']
     
+    # next_hour_weather is category for next hour weather 
+    next_hour_weather = customers_rental['weather'].copy()
+    next_hour_weather[:len(next_hour_weather)-1] = next_hour_weather[1:len(next_hour_weather)]
+    customers_rental['next_hour_weather'] = next_hour_weather.reset_index()['weather']
+    
+    
     # create derivate variable: day-to-day and hour change for continuous variables
     for var in continuous_var:
-        customers_rental[var+'_hour_change_pct'] = customers_rental[var].pct_change() * 100
         customers_rental[var+'_day_change_pct'] = customers_rental[var].pct_change(periods=24) * 100
         # to make positive values means percentage increase of variable in next hour
         customers_rental[var+'_next_hour_change_pct'] = customers_rental[var].pct_change(periods=-1)*(-1) * 100
-       
-    # from EDA 
-    customers_rental['bike_season'] = 0
-    customers_rental.loc[(customers_rental['month'] >= 4) & (customers_rental['month'] <= 11), 'bike_season'] = 1
+        # two below variables are used to detect anomalies / outliers
+        customers_rental[var+'_hour_change_pct'] = customers_rental[var].pct_change(periods=1) * 100
+        customers_rental[var+'next_day_change_pct'] = customers_rental[var].pct_change(periods=-24) * 100
+    
+    customers_rental['quarter'] = 0
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] > 0), 'quarter'] = 1
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] > 3), 'quarter'] = 2
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] > 6), 'quarter'] = 3
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] > 9), 'quarter'] = 4
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] > 0), 'quarter'] = 5
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] > 3), 'quarter'] = 6
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] > 6), 'quarter'] = 7
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] > 9), 'quarter'] = 8
+    
     
     # create additional variable about rental traffic by hour, 
     # specific hours are taken from Exploratoty Data Analysis from clustermap by the end of next section
@@ -201,46 +224,44 @@ def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = Fa
     customers_rental.loc[(customers_rental['temp'].round() >= 20) & (customers_rental['temp'].round() <= 29) &                          (customers_rental['workingday'] == 1), 'temp_cat'] = 5
     customers_rental.loc[(customers_rental['temp'].round() >= 30), 'temp_cat'] = 6
     
+    # from EDA 
+    customers_rental['bike_season'] = 0
+    customers_rental.loc[(customers_rental['month'] >= 4) & (customers_rental['month'] <= 11), 'bike_season'] = 1
 
     # data taken from independent source weather
     customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 15), "workingday"] = 1
     customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 16), "workingday"] = 1
     customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 15), "holiday"] = 1
     customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 4)                          & (customers_rental['day'] == 16), "holiday"] = 1
-    if (Kaggle):
-        customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 25), "holiday"] = 1
-        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 23), "holiday"] = 1
-        customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 25), "workingday"] = 0
-        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                          & (customers_rental['day'] == 23), "workingday"] = 0
-        customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 10)                          & (customers_rental['day'] == 30), "holiday"] = 1
-        customers_rental.loc[(customers_rental['month'] == 12)                          & ((customers_rental['day'] == 24) |                             (customers_rental['day'] == 26)), "workingday"] = 0
-        customers_rental.loc[(customers_rental['month'] == 12)                          & ((customers_rental['day'] == 24) |                             (customers_rental['day'] == 25) |                            (customers_rental['day'] == 26)), "holiday"] = 1
+
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                      & (customers_rental['day'] == 25), "holiday"] = 1
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                      & (customers_rental['day'] == 23), "holiday"] = 1
+    customers_rental.loc[(customers_rental['year'] == 2011) & (customers_rental['month'] == 11)                      & (customers_rental['day'] == 25), "workingday"] = 0
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 11)                      & (customers_rental['day'] == 23), "workingday"] = 0
+    customers_rental.loc[(customers_rental['year'] == 2012) & (customers_rental['month'] == 10)                      & (customers_rental['day'] == 30), "holiday"] = 1
+    customers_rental.loc[(customers_rental['month'] == 12)                      & ((customers_rental['day'] == 24) |                         (customers_rental['day'] == 26)), "workingday"] = 0
+    customers_rental.loc[(customers_rental['month'] == 12)                      & ((customers_rental['day'] == 24) |                         (customers_rental['day'] == 25) |                        (customers_rental['day'] == 26)), "holiday"] = 1
 
     #storms
     customers_rental.loc[(customers_rental['month'] == 2012) & (customers_rental['month'] == 5)                          & (customers_rental['day'] == 21), "holiday"] = 1
     #tornado
     customers_rental.loc[(customers_rental['month'] == 2012) & (customers_rental['month'] == 6)                          & (customers_rental['day'] == 1), "holiday"] = 1
     
-    # next_hour_weather is category for next hour weather 
-    next_hour_weather = customers_rental['weather'].copy()
-    next_hour_weather[len(next_hour_weather)] = next_hour_weather[len(next_hour_weather)-1]
-    next_hour_weather.pop(0)
-    customers_rental['next_hour_weather'] = next_hour_weather.reset_index()['weather']
+
     
     # create dummy variables (if needed)    
     if (get_dummy):
         customers_rental = pd.get_dummies(data=customers_rental, columns=categorical_var, drop_first=True)
 
     
-    
+    dt = pd.DatetimeIndex(customers_rental['datetime'])
+    customers_rental.set_index(dt, inplace=True)
     # first day don't have pct_change, as well as there are some divide by zero operation (inf)
     customers_rental = customers_rental.replace([np.inf, -np.inf], np.nan)
     # replace nan by interpolating
-    dt = pd.DatetimeIndex(customers_rental['datetime'])
-    customers_rental.set_index(dt, inplace=True)
     # first argument can't be zero for interpolation to works
     customers_rental.iloc[0] = customers_rental.iloc[0].fillna(0)
-    customers_rental = customers_rental.interpolate(method='time')
+    customers_rental = customers_rental.interpolate(method='linear')
     #customers_rental = customers_rental.fillna(customers_rental.mean())
     
     
@@ -265,25 +286,41 @@ def prepare_data(customers_rental, get_dummy=False, test_data=False, Kaggle = Fa
 
 # ** We will use dataset with dummy variables for linear regression **
 
-# In[11]:
+# In[453]:
+
+
+all_dummy = prepare_data(train_df.copy().append(test_df.copy()), get_dummy=True, test_data=True, Kaggle=True)
+
+
+# In[454]:
+
+all_no_dummy = prepare_data(train_df.copy().append(test_df.copy()), get_dummy=False, test_data=True, Kaggle=True)
+
+
+# In[457]:
+
+all_no_dummy[all_no_dummy['day'] >= 20].info()
+
+
+# In[335]:
 
 train_dummy = prepare_data(train_df.copy(), get_dummy=True)
 test_dummy_KAGGLE = prepare_data(test_df.copy(), get_dummy=True, test_data=True, Kaggle=True)
-all_dummy = train_dummy.append(test_dummy_KAGGLE)
+all_dummy = prepare_data(train_df.drop(dependent_variables, axis=1).copy().append(test_df.copy()), get_dummy=True, test_data=True)
 
 
 # **We will use dataset without dummy varaibles for random forest regression and gradient boosted regression.**
 
-# In[12]:
+# In[336]:
 
 train_no_dummy = prepare_data(train_df.copy(), get_dummy=False)
 test_no_dummy_KAGGLE = prepare_data(test_df.copy(), get_dummy=False, test_data=True, Kaggle=True)
-all_no_dummy = train_no_dummy.append(test_no_dummy_KAGGLE)
+all_no_dummy = prepare_data(train_df.drop(dependent_variables, axis=1).copy().append(test_df.copy()), get_dummy=False, test_data=True)
 
 
-# ** Three last 3 columns are our independent log variables **
+# ** Columns structure (without dummies) after data preparation part. Later we will explore which set of those columns use for machine learning models. **
 
-# In[13]:
+# In[337]:
 
 train_no_dummy.info()
 
@@ -291,7 +328,7 @@ train_no_dummy.info()
 # # 3. Exploratory Data Analysis
 # ** Let's explore the data! **
 
-# In[14]:
+# In[338]:
 
 sns.set_palette("coolwarm")
 sns.set_style('whitegrid')
@@ -299,7 +336,7 @@ sns.set_style('whitegrid')
 
 # ** Median of continuous variables looks reasonably. There are many outliers in windspeed variable and some outliers for zero humidity. **
 
-# In[51]:
+# In[339]:
 
 fig,(ax1,ax2)= plt.subplots(ncols=2, figsize=(12,4))
 sns.boxplot(data=train_no_dummy[continuous_var], ax=ax1)
@@ -307,158 +344,231 @@ sns.boxplot(data=train_no_dummy[dependent_variables], ax=ax2)
 
 
 # ### Let's dive deeper into each continuous variable
-# ** Explore data of average hour bike rentals across all days ** 
+# ** Explore data of daily average of one hour bike rentals across all years 2011 and 2012. Sliding windows is of interval 14 days. ** 
 
-# In[124]:
-
-train_daily_mean = train_no_dummy.groupby(['year','month','day']).mean()
-train_daily_mean_window = train_daily_mean.rolling(window=7).mean()
-
-all_daily_mean = all_no_dummy.groupby(['year','month','day']).mean()
-all_daily_mean_window = all_daily_mean.rolling(window=7).mean()
+# In[413]:
 
 outliers = {}
 
-
-# In[125]:
-
 def plot_with_window(column, all=True, window=True):   
     if (all):
-        data = all_daily_mean
-        data_window = all_daily_mean_window
-    else:
-        data = train_daily_mean
-        data_window = train_daily_mean_window
+        data = all_no_dummy2
+        data_window_mean = data.rolling(window=72).mean()
+        data_window_std = data.rolling(window=72).std()
         
+    else:
+        data = train_no_dummy.groupby(['year','month','day']).mean()
+        data_window_mean = data.rolling(window=7).mean()
+        data_window_std = data.rolling(window=7).std()
+    
+    diff = np.abs(data[column] - data_window_mean[column])
+    # diff for outliers candidates has to be at least 15% to avoid false outliers
+    outliers = diff[(diff > 3 * data_window_std[column]) & (diff > 100)] #.index.values.tolist()
+
     plt.figure(figsize=(9,4))
     data[column].plot()
-    data_window[column].plot(label='7 Day Avg', lw=2, ls='--', c='red')
+    data_window_mean[column].plot(label='3 Day Avg', lw=1, ls='--', c='red')
     
     plt.legend(loc='best')
     plt.ylabel(column)
-    plt.title('Daily mean of ' + column + '  over time')
+    plt.title('Daily mean of ' + column + ' over time')
     plt.tight_layout()
     
-    diff = data[column] - data_window[column]
-    return diff[np.abs(diff) > 3 * diff.std()].index.values.tolist()
+    
+    return outliers
 
 
-# In[126]:
+# In[341]:
 
-outliers['count'] = plot_with_window('count', all=False)
+def unique_outliers(col_list):
+    outliers_list = []
+    for col in col_list:
+        for timestamp in outliers[col].index:
+            outliers_list.append(timestamp)
+    return sorted(list(set(outliers_list)))
 
 
-# ** Plot for registred users looks almost the same becouse on average about 80% of total rentals are made be registered users. Thera are some outliers and each of them is negative. **
+# ** Characterics of casual renting is very changeable with many positive peaks. **
 
-# In[127]:
+# In[459]:
+
+for col in dependent_variables + ['count_log']: 
+    outliers[col] = plot_with_window(col, all=False)
+
+
+# ** Plot for registred users looks almost the same becouse on average about 80% of total rentals are made be registered users. **
+
+# In[343]:
 
 train_no_dummy[['casual', 'registered', 'count']].describe().ix['mean']
 
 
-# In[128]:
+# ** Thera are no outliers for dependent variables **
 
-outliers['registered'] = plot_with_window('registered', all=False)
+# In[344]:
 
-
-# ** Characterics of casual renting is inregular with many positive outliers. **
-
-# In[129]:
-
-outliers['casual'] = plot_with_window('casual', all=False)
+all_no_dummy.ix[unique_outliers(dependent_variables)]
 
 
-# ** Besides the fact there could be some independet factors causing those outlies, for now let's find out whether those outliers are caused by some weather data outliers. **
+# ** Let's find out whether there are some weather data outliers. **
 
-# In[130]:
+# In[345]:
 
-all_daily_mean.ix[outliers['count']]
-
-
-# ** Below we can see three significant outliers. Let's analyse them. **
-
-# In[131]:
-
-for col in ['temp',
-            'temp_hour_change_pct',            
+temp_var_list = ['temp',          
             'temp_day_change_pct',             
-            'temp_next_hour_change_pct']: 
+            'temp_next_hour_change_pct']
+
+
+# In[414]:
+
+for col in temp_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[132]:
+# ** Some of the outliers below. **
 
-all_daily_mean.ix[outliers['temp']]
+# In[415]:
+
+all_no_dummy.ix[unique_outliers(temp_var_list), temp_var_list].head()
 
 
-# ** Looks like there is another one outlier in August 2012 for atemp variable. **
+# In[416]:
 
-# In[133]:
-
-for col in ['atemp',
-            'atemp_hour_change_pct',            
+atemp_var_list = ['atemp',
+            'atemp_temp_diff',        
             'atemp_day_change_pct',             
-            'atemp_next_hour_change_pct']: 
+            'atemp_next_hour_change_pct']
+
+
+# In[417]:
+
+for col in atemp_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[134]:
+# In[418]:
 
-all_daily_mean.ix[outliers['atemp_hour_change_pct']]
+all_no_dummy.ix[unique_outliers(atemp_var_list)][atemp_var_list].head()
 
 
 # ** We can see one clear outlier in humidity. During minium day for count variable (2011, 3, 6), humidity had one of its highest value. It matches our understanding - there are fewer bike rentals during rain. On (2011, 3, 10) humidity has zero daily mean value although in adjacent days there was high value for humidity. It looks like some missing values. **
 
-# In[135]:
+# In[419]:
 
-all_daily_mean.idxmin()
+train_no_dummy.groupby(['year','month','day']).mean().idxmin()
 
 
-# In[136]:
+# In[420]:
 
-for col in ['humidity',
-            'humidity_hour_change_pct',            
+humidity_var_list = ['humidity',            
             'humidity_day_change_pct',             
-            'humidity_next_hour_change_pct']: 
+            'humidity_next_hour_change_pct']
+
+
+# In[421]:
+
+for col in humidity_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# ** Windspeed has very inregular characteriscs but in a way it has some stable label. Looks like this variable doesn't add value for our predictive models. **
+# In[422]:
 
-# In[137]:
+all_no_dummy.ix[unique_outliers(humidity_var_list)][humidity_var_list].head()
 
-for col in ['windspeed',
-            'windspeed_hour_change_pct',            
-            'windspeed_day_change_pct',             
-            'windspeed_next_hour_change_pct']: 
+
+# ** Windspeed becouse of its nature has very inregular characteriscs but in a way it has some stable mean level. Looks like this variable doesn't add value for our predictive models. **
+
+# In[423]:
+
+windspeed_var_list = ['windspeed',            'windspeed_day_change_pct',             
+            'windspeed_next_hour_change_pct']
+
+
+# In[424]:
+
+for col in windspeed_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[139]:
+# In[361]:
 
-outliers_list = []
-for date_list in outliers.values():
-    for date in date_list:
-        #unique_outliers.add(date)
-        #print(date)
-        outliers_list.append(date)
+all_no_dummy.ix[unique_outliers(windspeed_var_list)][windspeed_var_list].head()
 
 
-# In[148]:
+# ### There are 671 outliers in total. Let's interpolate them. 
 
-unique_outliers = list(set(outliers_list))
+# In[362]:
 
-
-# In[156]:
-
-all_daily_mean.ix[unique_outliers]
+len(unique_outliers(humidity_var_list + temp_var_list + atemp_var_list + windspeed_var_list))
 
 
+# In[411]:
+
+def interpolate_data(dataset):
+    data = dataset.copy()
+    for col_list in [humidity_var_list] + [temp_var_list] + [atemp_var_list] + [windspeed_var_list]:
+        for col in col_list:
+            for timestamp in outliers[col].index:
+#                     for col2 in col_list:
+                        data.loc[timestamp, col_list] = np.NaN
+
+    data = data.interpolate(method='linear', axis=0)
+#     data.info()
+#     data.describe()
+#     data = data.fillna(data.mean())
+    return data
+
+
+# In[412]:
+
+all_no_dummy2 = interpolate_data(all_no_dummy.copy())
+all_dummy2 = interpolate_data(all_dummy.copy())
+
+
+# In[403]:
+
+all_no_dummy.info()
+
+
+# In[404]:
+
+all_no_dummy2.info()
+
+
+# In[407]:
+
+all_no_dummy.loc[('2012-01-10 03:00:00'):('2012-01-10 07:00:00')]
+
+
+# In[408]:
+
+all_no_dummy2.ix[('2012-01-10 03:00:00'):('2012-01-10 07:00:00')]
+
+
+# In[310]:
+
+len(list(train_no_dummy.index))
+
+
+# In[308]:
+
+def diff_list(first, second):
+        second = set(second)
+        return [item for item in first if item not in second]
+
+
+# In[312]:
+
+diff_list(list(train_no_dummy2.index), list(train_no_dummy.index))
+
+
+# ___
 # ** From the boxplot below its clear most bike rentals are  in hours: 8, 17, 18. We should expect that registred users rent bikes in those hours becouse there are almost no outliers. Between those hours there are hours with many outliers. We should expect that more casual users rent bikes in those hours  **
 
-# In[86]:
+# In[75]:
 
 plt.figure(figsize=(10,6))
-sns.boxplot(x="hour", y="count", data=train_no_dummy)
+sns.boxplot(x="hour", y="count", data=train_no_dummy2)
 plt.tight_layout
 
 
@@ -511,11 +621,6 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# In[ ]:
-
-sns.distplot(train_no_dummy['temp'].interpolate(method='time'))
-
-
 # ** There are not clear linear relationships between variables, besides dependent variables (casual, registerd, count) themselves and temp - atemp.  It indicates that machine learning regression algorithms that can handle non-linearity could perfom better than linear regression.** 
 
 # In[ ]:
@@ -556,8 +661,8 @@ atemp_temp_diff_mean = train_no_dummy[train_no_dummy['atemp_temp_diff'] > -10]['
 
 # In[ ]:
 
-train_no_dummy.loc[train_no_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
-train_dummy.loc[train_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
+# train_no_dummy.loc[train_no_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
+# train_dummy.loc[train_dummy['atemp_temp_diff'] < -10 , 'atemp_temp_diff'] = atemp_temp_diff_mean
 
 
 # ** Verify the results and check whether there are some outliers in test_KAGGLE dataset.**
