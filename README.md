@@ -1,6 +1,6 @@
 ___
 
-<a href='https://www.capitalbikeshare.com'><p style="vertical-align:middle; text-align:center"><img src='CapitalBikeshare_Logo.jpg'"></p></a>
+<a href='https://www.capitalbikeshare.com'><p style="text-align:center"><img src='CapitalBikeshare_Logo.jpg'"></p></a>
 
 ___
 
