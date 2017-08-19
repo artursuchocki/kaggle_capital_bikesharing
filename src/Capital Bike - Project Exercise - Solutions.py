@@ -43,7 +43,7 @@ sys.path.insert(0,os.path.join(SPARK_HOME,"python","lib","py4j-0.10.4-src.zip"))
 
 # ** Initialize Spark Context for driver program **
 
-# In[3]:
+# In[2]:
 
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext
@@ -60,7 +60,7 @@ sqlContext = SQLContext(sc)
 
 # ** Import pandas, numpy, matplotlib,and seaborn. Then set %matplotlib inline **
 
-# In[4]:
+# In[3]:
 
 import pandas as pd
 import numpy as np
@@ -104,12 +104,12 @@ pd.set_option('display.max_rows', 200)
 
 # ** Read in the Customers Bike Rental csv train and test files as a Pandas DataFrame.**
 
-# In[5]:
+# In[4]:
 
 train_df = pd.read_csv("../data/train.csv")
 
 
-# In[6]:
+# In[5]:
 
 test_df = pd.read_csv("../data/test.csv")
 
@@ -118,29 +118,29 @@ test_df = pd.read_csv("../data/test.csv")
 
 # ** We will try both methods: predict amount of casual and regitered rentals separately and predict sum of those (count) **
 
-# In[7]:
+# In[6]:
 
 train_df.head()
 
 
-# In[8]:
+# In[7]:
 
 test_df.head()
 
 
 # ** Check out customers rental info() and describe() methods. Thera are total 10866 entries for traing data and 6493 entries for test data, none of the column has missing values**
 
-# In[9]:
+# In[8]:
 
 train_df.info()
 
 
-# In[10]:
+# In[9]:
 
 test_df.info()
 
 
-# In[11]:
+# In[10]:
 
 continuous_var = ['temp', 'atemp', 'humidity', 'windspeed'] 
 
@@ -153,7 +153,7 @@ dependent_variables_bc = ['casual_bc', 'registered_bc', 'count_bc']
 # dependent_variables_cat used for ChiSqSelector, which works only for classified labels
 dependent_variables_cat = ['casual_cat', 'registered_cat', 'count_cat']
 # categories from set_hour_cat() function
-hour_cat_list = [0,1,2,3,4]
+hour_cat_list = [0,1,2,3,4,5,6,7]
 added_cat_var = ['season_cat', 'month_cat', 'dayofweek_cat', 'weather_cat']
 
 
@@ -167,22 +167,23 @@ weatherDict = {1: "Clear", 2 : "Mist", 3 : "Light_Snow", 4 :"Heavy_Rain" }
 # 
 # **Lot's of data from the function below are taken in next section of Exploratory Data Analysis, like rental peak hours.**
 
-# In[12]:
+# In[11]:
 
 def set_derivated_vars(dataset):   
     customers_rental = dataset.copy()
     
     # create derivate variable: day-to-day and hour change for continuous variables
     for var in continuous_var:   
-        #customers_rental[var+'_prev_hour_change_pct'] = customers_rental[var].pct_change(periods=1) * 100
-        #customers_rental[var+'_prev_day_change_pct'] = customers_rental[var].pct_change(periods=24) * 100
-        
-        # to make positive values means percentage increase of variable in next hour
-        customers_rental[var+'_next_hour_change_pct'] = customers_rental[var].pct_change(periods=-1)*(-1) * 100
-        customers_rental[var+'_next_day_change_pct'] = customers_rental[var].pct_change(periods=-24) *(-1) * 100
+        customers_rental[var+'_prev_hour_change_pct'] = customers_rental[var].pct_change(periods=1) * 100
+        customers_rental[var+'_prev_day_change_pct'] = customers_rental[var].pct_change(periods=24) * 100
     
+    customers_rental['weather_prev_hour_change_pct'] = customers_rental['weather'].pct_change(periods=1) * 100
+    customers_rental['weather_prev_day_change_pct'] = customers_rental['weather'].pct_change(periods=24) * 100
+       
     customers_rental['atemp_temp_diff'] = customers_rental['atemp'] - customers_rental['temp']
 
+    
+    
     # first day don't have pct_change, as well as there are some divide by zero operation (inf)
     customers_rental = customers_rental.replace([np.inf, -np.inf], np.nan)
     
@@ -196,7 +197,7 @@ def set_derivated_vars(dataset):
     return customers_rental
 
 
-# In[13]:
+# In[12]:
 
 def set_temp_cat(dataset):
     customers_rental = dataset.copy()
@@ -212,25 +213,32 @@ def set_temp_cat(dataset):
     return customers_rental
 
 
-# In[14]:
+# In[13]:
 
 def set_hour_cat(dataset):
     customers_rental = dataset.copy()
     
     # create additional variable about rental traffic by hour, 
     # specific hours are taken from Exploratoty Data Analysis from clustermap by the end of next section
-    customers_rental['hour_cat'] = 1
-    customers_rental.loc[(customers_rental['hour'] <= 6) | (customers_rental['hour'] == 23), 'hour_cat'] = 2
-    customers_rental.loc[(customers_rental['hour'] >= 7) & (customers_rental['hour'] <= 8) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 3
-    customers_rental.loc[(customers_rental['hour'] >= 10) & (customers_rental['hour'] <= 16) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 3
-    customers_rental.loc[(customers_rental['hour'] >= 17) & (customers_rental['hour'] <= 18) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 3   
-    customers_rental.loc[((customers_rental['hour'] >= 20) & (customers_rental['hour'] <= 22)) |                          (customers_rental['hour'] == 9), 'hour_cat'] = 4
-    customers_rental.loc[((customers_rental['hour'] >= 1) & (customers_rental['hour'] <= 5)), 'hour_cat'] = 0
+    customers_rental['hour_cat'] = -1
+
+    # workingday = 1
+    customers_rental.loc[(customers_rental['hour'] <= 5) & (customers_rental['workingday'] == 1), 'hour_cat'] = 0
+    customers_rental.loc[((customers_rental['hour'] == 6) | (customers_rental['hour'] == 10) |                           (customers_rental['hour'] == 11) | (customers_rental['hour'] ==22) |                           (customers_rental['hour'] == 23)) & (customers_rental['workingday'] == 1), 'hour_cat'] = 1        
+    customers_rental.loc[(customers_rental['hour'] >= 7) & (customers_rental['hour'] <= 21) &                          (customers_rental['workingday'] == 1), 'hour_cat'] = 2
+    customers_rental.loc[((customers_rental['hour'] == 8) | (customers_rental['hour'] == 17) |                           (customers_rental['hour'] == 18)) & (customers_rental['workingday'] == 1), 'hour_cat'] = 3
+    
+    # workingday = 0
+    customers_rental.loc[((customers_rental['hour'] >= 22) | (customers_rental['hour'] <= 1) |                          (customers_rental['hour'] == 8)) & (customers_rental['workingday'] == 0), 'hour_cat'] = 4   
+    customers_rental.loc[((customers_rental['hour'] >= 2) & (customers_rental['hour'] <= 7)) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 5   
+    customers_rental.loc[((customers_rental['hour'] == 9) | (customers_rental['hour'] == 20) |                           (customers_rental['hour'] == 21)) & (customers_rental['workingday'] == 0), 'hour_cat'] = 6
+    customers_rental.loc[((customers_rental['hour'] >= 10) & (customers_rental['hour'] <= 19)) &                          (customers_rental['workingday'] == 0), 'hour_cat'] = 7
+
     
     return customers_rental
 
 
-# In[15]:
+# In[14]:
 
 def set_independent_weather(dataset):
     customers_rental = dataset.copy()
@@ -268,15 +276,10 @@ def set_independent_weather(dataset):
     return customers_rental
 
 
-# In[16]:
+# In[15]:
 
 def prepare_data(dataset):
     customers_rental = dataset.copy()
-    
-    # next_hour_weather is category for next hour weather 
-    next_hour_weather = customers_rental['weather'].copy()
-    next_hour_weather[:len(next_hour_weather)-1] = next_hour_weather[1:len(next_hour_weather)]
-    customers_rental['next_hour_weather'] = next_hour_weather.reset_index()['weather']
     
     dt = pd.DatetimeIndex(customers_rental['datetime'])
     customers_rental.set_index(dt, inplace=True)
@@ -351,12 +354,13 @@ def prepare_data(dataset):
             # bc[0] has transformed data, bc[1] has used lambda
             customers_rental.loc[(customers_rental['hour_cat'] == hour_cat) & (customers_rental['train'] == 1),                                  '%s_bc' % col] = bc[0]
             
-            customers_rental.loc[(customers_rental['hour_cat'] == hour_cat) & (customers_rental['train'] == 1),                                  '%s_cat' % col] = pd.cut(customers_rental[(customers_rental['hour_cat'] == hour_cat) &                                                           (customers_rental['train'] == 1)]['%s_bc' % col],                                                           bins=24, labels=range(0,24), include_lowest=True)
+            customers_rental.loc[(customers_rental['hour_cat'] == hour_cat) & (customers_rental['train'] == 1),                                  '%s_cat' % col] = pd.cut(customers_rental[(customers_rental['hour_cat'] == hour_cat) &                                                           (customers_rental['train'] == 1)]['%s_bc' % col],                                                           bins=64, labels=range(0,64), include_lowest=True)
 
             lambdas[col] = bc[1]
             
         bc_lambda_dict[hour_cat] = lambdas
-        
+    
+    
     # drop unnecessary variables
     customers_rental.drop(['datetime','date'], axis=1, inplace=True)
    
@@ -365,42 +369,27 @@ def prepare_data(dataset):
 
 # ** We will use dataset with dummy variables for linear regression. ** **We will use dataset without dummy varaibles for random forest regression and gradient boosted regression. bc_lambda_dict is dictionary for lambdas used in BoxCox transformation, and used for inverted BoxCox transformation.**
 
-# In[17]:
+# In[16]:
 
 all_no_dummy, bc_lambda_dict = prepare_data(train_df.append(test_df))
 
 
 # ** Columns structure (without dummies) after data preparation part. Later we will explore which subset of those columns use for machine learning models. **
 
-# In[18]:
+# In[17]:
 
 all_no_dummy.info()
 
 
-# In[28]:
+# In[18]:
 
 all_no_dummy.describe()
-
-
-# In[33]:
-
-sns.distplot(all_no_dummy[(all_no_dummy['train'] == 1) & (all_no_dummy['hour_cat'] == 2)]['hour'], bins=24)
-
-
-# In[34]:
-
-all_no_dummy[all_no_dummy['workingday'] == 1].groupby('hour').mean()['count']
-
-
-# In[35]:
-
-all_no_dummy[all_no_dummy['workingday'] != 1].groupby('hour').mean()['count']
 
 
 # # 3. Exploratory Data Analysis
 # ** Let's explore the data! **
 
-# In[ ]:
+# In[19]:
 
 sns.set_palette("coolwarm")
 sns.set_style('whitegrid')
@@ -408,7 +397,7 @@ sns.set_style('whitegrid')
 
 # ** Median of continuous variables looks reasonably. There are many outliers in windspeed variable and some outliers for zero humidity. **
 
-# In[ ]:
+# In[20]:
 
 fig,(ax1,ax2)= plt.subplots(ncols=2, figsize=(12,4))
 sns.boxplot(data=all_no_dummy[continuous_var], ax=ax1)
@@ -417,7 +406,7 @@ sns.boxplot(data=all_no_dummy[all_no_dummy['train'] == 1][dependent_variables], 
 
 # ** Let's find out what is distribution curves for dependent variables. Most of the current machine learning algorithmics performs best on normally distributed data. Pure distribution of depednent variables look more to be Poisson than Gaussian. Log transformation can helps a lot in converting data to normal-like distribution but BoxCox method do the best job by automatically detect proportion (lambda) of log and sqrt transformation. **
 
-# In[ ]:
+# In[21]:
 
 fig,axes= plt.subplots(nrows=3, ncols=2, figsize=(11,10))
 
@@ -431,77 +420,56 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# ** We can see that LOG distribution looks more normal-like but it's clearly skewed. BoxCox helps us deal with it. But first let's examine raw data divided into 5 hour categories. **
+# ** We can see that LOG distribution looks more normal-like but it's clearly skewed. BoxCox helps us deal with it. But first let's examine raw data divided into 8 hour categories. **
 
-# In[ ]:
+# In[22]:
 
-fig,axes= plt.subplots(nrows=3, ncols=5, figsize=(15,10))
+for label in dependent_variables:
+    color='orange'
+    fig,axes= plt.subplots(nrows=2, ncols=4, figsize=(15,10)) 
+    
+    if (label == 'registered'): color='red'
+    elif (label == 'count'): color='green'
+        
+    for col in range(0,8):
+        sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == col) & (all_no_dummy['train'] == 1)][label], bins = 24, ax=axes[(col // 4)][(col % 4)], axlabel=label + ', HOUR_CAT = ' + str(col),color=color)
 
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['registered'], bins = 24, ax=axes[0][0], axlabel='Registered, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['registered'], bins = 24, ax=axes[0][1], axlabel='Registered, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['registered'], bins = 24, ax=axes[0][2], axlabel='Registered, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['registered'], bins = 24, ax=axes[0][3], axlabel='Registered, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['registered'], bins = 24, ax=axes[0][4], axlabel='Registered, HOUR_CAT = 4', color='blue')
-
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['casual'], bins = 24, ax=axes[1][0], axlabel='Casual, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['casual'], bins = 24, ax=axes[1][1], axlabel='Casual, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['casual'], bins = 24, ax=axes[1][2], axlabel='Casual, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['casual'], bins = 24, ax=axes[1][3], axlabel='Casual, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['casual'], bins = 24, ax=axes[1][4], axlabel='Casual, HOUR_CAT = 4', color='blue')
-
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['count'], bins = 24, ax=axes[2][0], axlabel='Count, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['count'], bins = 24, ax=axes[2][1], axlabel='Count, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['count'], bins = 24, ax=axes[2][2], axlabel='Count, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['count'], bins = 24, ax=axes[2][3], axlabel='Count, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['count'], bins = 24, ax=axes[2][4], axlabel='Count, HOUR_CAT = 4', color='blue')
-
-plt.subplots_adjust(hspace = 0.3)
-plt.tight_layout
+    plt.subplots_adjust(hspace = 0.3)
+    plt.tight_layout
 
 
 # ** Data are highly skewed. It's time to use explore BoxCox transformation. **
 
-# In[ ]:
+# In[23]:
 
-fig,axes= plt.subplots(nrows=3, ncols=5, figsize=(12,10))
+for label in dependent_variables_bc:
+    color='orange'
+    fig,axes= plt.subplots(nrows=2, ncols=4, figsize=(15,10)) 
+    
+    if (label == 'registered_bc'): color='red'
+    elif (label == 'count_bc'): color='green'
+        
+    for col in range(0,8):
+        sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == col) & (all_no_dummy['train'] == 1)][label], bins = 24, ax=axes[(col // 4)][(col % 4)], axlabel=label + ', HOUR_CAT = ' + str(col),color=color)
 
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['registered_bc'], bins = 24, ax=axes[0][0], axlabel='Registered, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['registered_bc'], bins = 24, ax=axes[0][1], axlabel='Registered, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['registered_bc'], bins = 24, ax=axes[0][2], axlabel='Registered, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['registered_bc'], bins = 24, ax=axes[0][3], axlabel='Registered, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['registered_bc'], bins = 24, ax=axes[0][4], axlabel='Registered, HOUR_CAT = 4', color='blue')
-
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['casual_bc'], bins = 24, ax=axes[1][0], axlabel='Casual, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['casual_bc'], bins = 24, ax=axes[1][1], axlabel='Casual, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['casual_bc'], bins = 24, ax=axes[1][2], axlabel='Casual, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['casual_bc'], bins = 24, ax=axes[1][3], axlabel='Casual, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['casual_bc'], bins = 24, ax=axes[1][4], axlabel='Casual, HOUR_CAT = 4', color='blue')
-
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 0) & (all_no_dummy['train'] == 1)]['count_bc'], bins = 24, ax=axes[2][0], axlabel='Count, HOUR_CAT = 0', color='yellow')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 1) & (all_no_dummy['train'] == 1)]['count_bc'], bins = 24, ax=axes[2][1], axlabel='Count, HOUR_CAT = 1', color='orange')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 2) & (all_no_dummy['train'] == 1)]['count_bc'], bins = 24, ax=axes[2][2], axlabel='Count, HOUR_CAT = 2', color='red')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 3) & (all_no_dummy['train'] == 1)]['count_bc'], bins = 24, ax=axes[2][3], axlabel='Count, HOUR_CAT = 3', color='green')
-sns.distplot(all_no_dummy[(all_no_dummy['hour_cat'] == 4) & (all_no_dummy['train'] == 1)]['count_bc'], bins = 24, ax=axes[2][4], axlabel='Count, HOUR_CAT = 4', color='blue')
+    plt.subplots_adjust(hspace = 0.3)
+    plt.tight_layout
 
 
-plt.subplots_adjust(hspace = 0.3)
-plt.tight_layout
+# ** Right now only casual rental in hour_cat = 0 (from 0 a.m to 5 a.m., wd=1) and  hour_cat = 5 (from 22 p.m till 1 a.m and 8 a.m., wd=0) are skewed toward zero. Rest of the distributions look good. Let's test those distribution with Kolmogorov-Smirnov Test. P-Value above 0.05 will reject distribution as to be Gaussian one. **
 
+# In[24]:
 
-# ** Right now only casual rental in hour_cat = 0 (from 1 a.m to 5 a.m.) and  hour_cat = 2 (from 23 p.m till 1 a.m and 6 a.m.) are skewed toward zero. Rest of the distributions look good. Let's test those distribution with Kolmogorov-Smirnov Test. P-Value above 0.05 will reject distribution as to be Gaussian one. **
-
-# In[ ]:
-
-for col in dependent_variables:
+for col in dependent_variables_bc:
     print("Kolmogorov-Smirnov Test for " + col)
     for hour_cat in hour_cat_list:
-        print("Hour_cat " + str(hour_cat) + ": " + str(kstest(all_no_dummy[(all_no_dummy['hour_cat'] == hour_cat) & (all_no_dummy['train'] == 1)]['%s_bc' % col], 'norm')))
+        print("Hour_cat " + str(hour_cat) + ": " + str(kstest(all_no_dummy[(all_no_dummy['hour_cat'] == hour_cat) & (all_no_dummy['train'] == 1)][col], 'norm')))
     print()
 
 
 # ** All distribution passed test, let's find out what is skew for those distributions. The closer to zero the better. **
 
-# In[ ]:
+# In[25]:
 
 for col in dependent_variables:
     print("Distribution skew for " + col)
@@ -512,7 +480,7 @@ for col in dependent_variables:
 
 # ** Let's compare those results skews with raw data. **
 
-# In[ ]:
+# In[26]:
 
 for col in dependent_variables:
     print("Distribution skew for " + col)
@@ -524,9 +492,9 @@ for col in dependent_variables:
 # ** Looks like we did big improvement. Good work. **
 
 # ### Let's dive deeper into each continuous variable
-# ** Explore data of daily average of one hour bike rentals across all years 2011 and 2012. Sliding windows is of interval 7 days for dependent variables and 3 days for continuous independent variables. Default are set to 75 percentage change computed as (a-b)/b. ** 
+# ** Explore data of daily average of one hour bike rentals across all years 2011 and 2012. Sliding windows is of interval 7 days for dependent variables and 3 days for continuous independent variables. Default threshold is set to 75 percentage change computed as (a-b)/b. ** 
 
-# In[ ]:
+# In[27]:
 
 outliers = {}
 
@@ -561,7 +529,7 @@ def plot_with_window(column, dataset=all_no_dummy,  all=True, threshold=75):
     return outliers
 
 
-# In[ ]:
+# In[28]:
 
 def unique_outliers(col_list):
     outliers_list = []
@@ -573,38 +541,36 @@ def unique_outliers(col_list):
 
 # ** Characterics of casual renting is very changeable with many positive peaks. **
 
-# In[ ]:
+# In[29]:
 
 for col in dependent_variables: 
-    outliers[col] = plot_with_window(col, all=False, threshold=10)
+    outliers[col] = plot_with_window(col, all=False)
 
 
 # ** Plot for registred users looks almost the same becouse on average about 80% of total rentals are made be registered users. **
 
-# In[ ]:
+# In[30]:
 
 all_no_dummy[all_no_dummy['train'] == 1][['casual', 'registered', 'count']].describe().ix['mean']
 
 
 # ** Thera are no outliers for dependent variables (by our criteria). **
 
-# In[ ]:
+# In[31]:
 
 all_no_dummy.ix[unique_outliers(dependent_variables)]
 
 
 # ** Let's find out whether there are some weather data outliers. **
 
-# In[ ]:
+# In[32]:
 
 temp_var_list = ['temp',
-            #'temp_prev_hour_change_pct',
-            'temp_next_hour_change_pct',
-            #'temp_prev_day_change_pct',             
-            'temp_next_day_change_pct']
+            'temp_prev_hour_change_pct',
+            'temp_prev_day_change_pct']
 
 
-# In[ ]:
+# In[33]:
 
 for col in temp_var_list: 
     outliers[col] = plot_with_window(col)
@@ -612,98 +578,92 @@ for col in temp_var_list:
 
 # ** Some of the outliers below. **
 
-# In[ ]:
+# In[34]:
 
 all_no_dummy.ix[unique_outliers(temp_var_list), temp_var_list].head()
 
 
-# In[ ]:
+# In[35]:
 
 atemp_var_list = ['atemp',
-            #'atemp_prev_hour_change_pct',
-            'atemp_next_hour_change_pct',
-            #'atemp_prev_day_change_pct',             
-            'atemp_next_day_change_pct']
+            'atemp_prev_hour_change_pct',
+            'atemp_prev_day_change_pct']
 
 
-# In[ ]:
+# In[36]:
 
 for col in atemp_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[ ]:
+# In[37]:
 
 all_no_dummy.ix[unique_outliers(atemp_var_list)][atemp_var_list].head()
 
 
-# In[ ]:
+# In[38]:
 
 outliers['atemp_temp_diff'] = plot_with_window('atemp_temp_diff', threshold=10)
 
 
-# In[ ]:
+# In[39]:
 
-all_no_dummy.ix[unique_outliers(['atemp_temp_diff'])]['atemp_temp_diff'].head(400)
+all_no_dummy.ix[unique_outliers(['atemp_temp_diff'])]['atemp_temp_diff'].head()
 
 
 # ** We can see one clear outlier in humidity. During minium day for count variable (2011, 3, 6), humidity had one of its highest value. It matches our understanding - there are fewer bike rentals during rain. On (2011, 3, 10) humidity has zero daily mean value although in adjacent days there was high value for humidity. It looks like some missing values. **
 
-# In[ ]:
+# In[40]:
 
 all_no_dummy.groupby(['year','month','day']).mean().idxmin()
 
 
-# In[ ]:
+# In[41]:
 
 humidity_var_list = ['humidity',
-            #'humidity_prev_hour_change_pct',
-            'humidity_next_hour_change_pct',
-            #'humidity_prev_day_change_pct',             
-            'humidity_next_day_change_pct']
+            'humidity_prev_hour_change_pct',
+            'humidity_prev_day_change_pct']
 
 
-# In[ ]:
+# In[42]:
 
 for col in humidity_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[ ]:
+# In[43]:
 
 all_no_dummy.ix[unique_outliers(humidity_var_list)][humidity_var_list].head()
 
 
 # ** Windspeed becouse of its nature has very inregular characteriscs but in a way it has some stable mean level. Looks like this variable doesn't add value for our predictive models. **
 
-# In[ ]:
+# In[44]:
 
 windspeed_var_list = ['windspeed',
-            #'windspeed_prev_hour_change_pct',
-            'windspeed_next_hour_change_pct',
-            #'windspeed_prev_day_change_pct',             
-            'windspeed_next_day_change_pct']
+            'windspeed_prev_hour_change_pct',
+            'windspeed_prev_day_change_pct']
 
 
-# In[ ]:
+# In[45]:
 
 for col in windspeed_var_list: 
     outliers[col] = plot_with_window(col)
 
 
-# In[ ]:
+# In[46]:
 
 all_no_dummy.ix[unique_outliers(windspeed_var_list)][windspeed_var_list].head()
 
 
-# ### There are 934 values beyond out threshold in total. Let's interpolate them. 
+# ### There are 808 values beyond our threshold in total. Let's interpolate them. 
 
-# In[ ]:
+# In[47]:
 
 len(unique_outliers(humidity_var_list + temp_var_list + atemp_var_list + windspeed_var_list + ['atemp_temp_diff']))
 
 
-# In[ ]:
+# In[48]:
 
 def interpolate_data(dataset):
     data = dataset.copy()
@@ -721,14 +681,14 @@ def interpolate_data(dataset):
     return data
 
 
-# In[ ]:
+# In[49]:
 
 all_no_dummy_interpolate = interpolate_data(all_no_dummy.copy())
 
 
 # ** Difference between original and interpolated data. **
 
-# In[ ]:
+# In[50]:
 
 (all_no_dummy != all_no_dummy_interpolate).sum()
 
@@ -737,20 +697,20 @@ all_no_dummy_interpolate = interpolate_data(all_no_dummy.copy())
 # 
 # ** 2012-01-10 05:00:00  - there were outliers for temp (16.40) and atemp (20.46). Those values were interpolated to (12.77) and (15.26) respectively. **
 
-# In[ ]:
+# In[51]:
 
-all_no_dummy.loc[('2012-01-10 02:00:00'):('2012-01-10 07:00:00')][continuous_var]
+all_no_dummy.loc[('2012-01-10 02:00:00'):('2012-01-10 07:00:00')][['temp', 'atemp']]
 
 
-# In[ ]:
+# In[52]:
 
-all_no_dummy_interpolate.ix[('2012-01-10 02:00:00'):('2012-01-10 07:00:00')][continuous_var]
+all_no_dummy_interpolate.ix[('2012-01-10 02:00:00'):('2012-01-10 07:00:00')][['temp', 'atemp']]
 
 
 # ___
-# ** From the boxplot below its clear most bike rentals are  in hours: 8, 17, 18. We should expect that registred users rent bikes in those hours becouse there are almost no outliers. Between those hours there are hours with many outliers. We should expect that more casual users rent bikes in those hours  **
+# ** From the boxplot below its clear most bike rentals are  in hours: 8, 17, 18. We should expect that regular registred users rent bikes in those hours becouse there are almost no outliers. Between those hours there are hours with many outliers. We should expect that more casual users rent bikes in those hours  **
 
-# In[ ]:
+# In[53]:
 
 plt.figure(figsize=(10,6))
 sns.boxplot(x="hour", y="count", data=all_no_dummy[all_no_dummy['train'] == 1])
@@ -759,7 +719,7 @@ plt.tight_layout
 
 # ** On the plots below we can see rentals distribution for specifc month. Druing summer there are most demand for bikes. During all season hour-rental characteristics have the same shape: for working days thera are two peaks on 8 and 17-18 hours. Casual users rent bike usually between those hours as well as during weekends. **
 
-# In[ ]:
+# In[54]:
 
 # below code is taken from https://www.kaggle.com/viveksrinivasan/eda-ensemble-model-top-10-percentile
 
@@ -790,40 +750,40 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# ** There are not clear linear relationships between variables, besides dependent variables (casual, registerd, count) themselves and temp - atemp.  It indicates that machine learning regression algorithms that can handle non-linearity could perfom better than linear regression.** 
+# ** There are not clear linear relationships between variables, besides dependent variables (casual, registerd, count) themselves and temp - atemp.  It indicates that machine learning regression algorithms that can handle non-linearity could perfom better than linear regression or there is a need to divide data into more linear parts.** 
 
-# In[ ]:
+# In[55]:
 
 sns.pairplot(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1], vars=continuous_var + dependent_variables, hue='holiday', palette='coolwarm')
 
 
 # ** There is some correlation (showed on some next cells on heatmap) between casual and registred users rentals. **
 
-# In[ ]:
+# In[56]:
 
 sns.pairplot(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1], vars=['casual', 'registered'], palette='coolwarm')
 
 
-# ** It's clear linear relationships between temperature in Celsius and "feels like" temperature in Celsius'. We should drop one of them to avoid <a href='https://en.wikipedia.org/wiki/Multicollinearity'> multicollinearity </a> **
+# ** It's clear linear relationships between temperature in Celsius and "feels like" temperature in Celsius'. We should probably drop one of them to avoid <a href='https://en.wikipedia.org/wiki/Multicollinearity'> multicollinearity </a> or use ensebled methods. **
 
-# In[ ]:
+# In[57]:
 
 sns.jointplot(x='temp',y='atemp',data=all_no_dummy_interpolate)
 
 
-# ** There are potentially 25 outliers where absolute difference between temperature in Celsius and "feels like" temperature in Celsius is greater than 5 Celsius degree. We can build another linear regression model to predict atemp for those outliers. But taking into account fact, there are only 24 records, we just simply set mean() on atemp_temp_diff variable for those records and we will drop atemp variable as well.** 
+# ** There are potentially 25 outliers where absolute difference between temperature in Celsius and "feels like" temperature in Celsius is greater than 10 Celsius degree. We can build another linear regression model to predict atemp for those outliers. But taking into account fact, there are only 24 records, we just simply interpolate atemp_temp_diff variable for those records.** 
 
-# In[ ]:
+# In[58]:
 
 sns.jointplot(x='temp',y='atemp_temp_diff',data=all_no_dummy_interpolate)
 
 
-# In[ ]:
+# In[59]:
 
 all_no_dummy_interpolate[all_no_dummy_interpolate['atemp_temp_diff'] < -10][continuous_var + ['atemp_temp_diff']]
 
 
-# In[ ]:
+# In[60]:
 
 all_no_dummy_interpolate.loc[all_no_dummy_interpolate['atemp_temp_diff'] < -10 ,                              ['atemp','atemp_temp_diff']] = np.NaN
 all_no_dummy.loc[all_no_dummy['atemp_temp_diff'] < -10 ,                              ['atemp','atemp_temp_diff']] = np.NaN
@@ -835,7 +795,7 @@ all_no_dummy = set_derivated_vars(all_no_dummy)
 
 # ** Right now there are no outliers for atemp_temp_diff variable. **
 
-# In[ ]:
+# In[61]:
 
 all_no_dummy_interpolate[all_no_dummy_interpolate['atemp_temp_diff'] < -10][continuous_var + ['atemp_temp_diff']]
 
@@ -845,7 +805,7 @@ all_no_dummy_interpolate[all_no_dummy_interpolate['atemp_temp_diff'] < -10][cont
 # 
 # ** TRAIN data set - categorical variables. **
 
-# In[ ]:
+# In[62]:
 
 fig,axes= plt.subplots(nrows=4, ncols=2, figsize=(11,10))
 
@@ -861,9 +821,9 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# ** TEST data set - categorical variables. **
+# ** TEST Kaggle data set - categorical variables. **
 
-# In[ ]:
+# In[63]:
 
 fig,axes= plt.subplots(nrows=4, ncols=2, figsize=(11,10))
 
@@ -885,7 +845,7 @@ plt.tight_layout
 # 
 # ** TRAIN data set - continuous variables. **
 
-# In[ ]:
+# In[64]:
 
 fig,axes= plt.subplots(nrows=4, ncols=4, figsize=(11,10))
 
@@ -914,124 +874,133 @@ plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
 
 
-# ** We can see that both TRAIN and TEST data sets have very similar distribution for continuous variablers so overall there is no need to  select specific subset from training data to train models on. **
+# ** We can see that both TRAIN and TEST data sets have very similar distribution for continuous and nominal variables so overall there is no need to  select specific subset (similar to test data) from training data to train models on. **
 
 # ___
 # ### Mesure correlation between variables.
 
-# In[ ]:
+# In[65]:
 
 all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].corr().ix[dependent_variables]
 
 
 # ** Heatmap is better visualisation tool to see some Pearson Correlation. There aren't strong correlations: hour and temp variable have approximately 0.4 Pearson Correlation value. **
 
-# In[ ]:
+# In[66]:
 
 fig = plt.figure(figsize=(20,12))
-sns.heatmap(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].corr(), annot=False,cmap='coolwarm')
+sns.heatmap(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].drop(dependent_variables + dependent_variables_cat + dependent_variables_log, axis=1).corr(), annot=False,cmap='coolwarm')
 plt.tight_layout
 
 
+# ### Let's visualize linear relationships between variables with highest correlations: hour and temp. 
+
 # ** We can see that linear regression can give us only roughly approximation of total rentals from hour variable. **
 
-# In[ ]:
+# In[67]:
 
 sns.jointplot(x='hour',y='count',kind='reg',data=all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1])
 
 
 # ** Temp-Count scatter plot is skewed in right direction which indicates that higher temperature results in higher total bike rentals. But again, we can see it's only roughly approximation. **
 
-# In[ ]:
+# In[68]:
 
 sns.jointplot(x='temp',y='count',kind='reg',data=all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1])
 
 
-# In[ ]:
+# In[69]:
 
 sns.jointplot(x='temp',y='count',kind='hex',data=all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1])
 
 
 # ** Let's have a close look on ditribution across different years. **
 
-# In[ ]:
+# In[70]:
 
 train_no_dummy_year_piv = all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].pivot_table(values='count',index='month',columns='year').rename(index=monthDict)
 train_no_dummy_year_piv
 
 
-# ** It looks like there are much more rentals in 2012 than in 2011. Perhaps there were more bikes to rent in 2012 than in 2011. Another reason could be fact that people got used to rent a bike from Capital BikeShare and there were more registred users in total. **
+# ** It looks like there are much more rentals in 2012 than in 2011. Perhaps there were more bikes in total to rent in 2012 than in 2011. Another reason could be fact that people got used to rent a bike from Capital BikeShare and there were more registred users in total. **
 
-# In[ ]:
+# In[71]:
 
 fig = plt.figure(figsize=(7,5))
 sns.heatmap(train_no_dummy_year_piv,cmap='coolwarm')
 
 
-# In[ ]:
+# In[72]:
 
 train_no_dummy_month_piv = all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].pivot_table(values='count',index='hour',columns='month').rename(columns=monthDict)
 
 
 # ** We can see that from April to November there is a bike season.  **
 
-# In[ ]:
+# In[73]:
 
 fig = plt.figure(figsize=(11,8))
 sns.heatmap(train_no_dummy_month_piv,cmap='coolwarm')
 
 
-# In[ ]:
+# ** Let's cluster hour and workingday impact on rentals. **
+
+# In[74]:
 
 train_no_dummy_workingday_piv = all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].pivot_table(values='count',index='hour',columns=['workingday'])
 
 
-# In[ ]:
+# In[75]:
 
 sns.clustermap(train_no_dummy_workingday_piv,cmap='coolwarm',standard_scale=1,method='average')
 
 
-# ** From the plot clustermap above we can devide hours into 4 categories: **
-# <ol> 
-# <li>Dusk and dawn
-#     <ul>
-#         <li>(0-6) + 23</li>
-#     </ul>
+# In[76]:
+
+all_no_dummy_interpolate[(all_no_dummy_interpolate['train'] == 1) &                          (all_no_dummy_interpolate['workingday'] == 1)].groupby('hour').mean()['count']
+
+
+# In[77]:
+
+all_no_dummy_interpolate[(all_no_dummy_interpolate['train'] == 1) &                          (all_no_dummy_interpolate['workingday'] == 0)].groupby('hour').mean()['count']
+
+
+# ### From the plot clustermap above and hourly count mean statistics, we can devide hours into 8 categories: 
+# <ul> 
+# <li>workingday = 1
+#     <ol>
+#         <li>(0-5)</li>
+#         <li>{6,10,11,22,23}</li>
+#         <li>(7-21) \ {8,17,18}</li>
+#         <li>{8,17,18}</li>
+#     </ol>
 # </li>
-# 
-# <li>Traffic peak
-#     <ul>
-#         <li>(7-8), workingday = 1</li>
-#         <li>(10-16), workingday = 0</li>
-#         <li>(17-18), workingday = 1</li>
-#     </ul>
+# <br>
+# <li>workingday = 0
+#     <ol>
+#         <li>(22-1) v {8}</li>
+#         <li>(2-7)</li>
+#         <li>{9,20,21}</li>
+#         <li>(10-19)</li>
+#     </ol>
 # </li>
+# </ul>
 # 
-# <li>Evening and works begin
-#     <ul>
-#         <li>(19-22) + 9</li>
-#     </ul>
-# </li>
-# 
-# <li>Rest
-# 
-# </li>
-# 
-# </ol>
-# </ol>
 # We added those categories in variable **hour_cat.**
 
-# In[ ]:
+# ** Let's cluster temp and workingday impact on rentals. **
+
+# In[78]:
 
 train_no_dummy_year_temp_piv = all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1].round().pivot_table(values='count',index='temp',columns=['workingday']).dropna()
 
 
-# In[ ]:
+# In[79]:
 
 sns.clustermap(train_no_dummy_year_temp_piv,cmap='coolwarm',standard_scale=1,method='average')
 
 
-# ** From the plot clustermap above we can devide rounded temp into 3 categories: **
+# ### From the plot clustermap above we can devide rounded temp into 3 categories: 
 # <ol>
 # <li>(below 13)</li>
 # <li>[13-30], workingday=0</li>
@@ -1074,7 +1043,7 @@ sns.clustermap(train_no_dummy_year_temp_piv,cmap='coolwarm',standard_scale=1,met
 # All of these are **loss functions**, because we want to minimize them.
 # ___
 
-# In[ ]:
+# In[80]:
 
 def evaluatorMAE_own(predictions, labelCol):
     diff = np.abs(predictions[labelCol] - predictions['prediction'])
@@ -1139,31 +1108,32 @@ def evaluateMetrics(preds, labelCol, lmbd, rollback=True, rounded=True):
 
 # ** Drop unnecessary added category variables from training dataset. Apache Spark needs all data to be numerical. Later on we will perform feature selection to chose best variables for our models. **
 
-# In[ ]:
+# In[81]:
 
 all_no_dummy_interpolate = all_no_dummy_interpolate.drop(added_cat_var, axis=1)
 
 
-# In[ ]:
+# ** Dummy variables for linear regression. **
+
+# In[82]:
 
 all_dummy_interpolate = pd.get_dummies(data = all_no_dummy_interpolate.copy(),                              columns = categorical_var, drop_first=True)
 
 
-# ** Split trainind data into train and "test" to evaluate our models. Final model will predict labels for test_KAGGLE datasets. **
+# ** Split training data into train and "test" to evaluate our models. Final model will predict labels for test_KAGGLE datasets. **
 
-# In[ ]:
+# In[83]:
 
-from sklearn.model_selection import train_test_split
+trainingData_dummy = all_dummy_interpolate[all_dummy_interpolate['day'] <= 15]
+testData_dummy = all_dummy_interpolate[(all_dummy_interpolate['day'] > 15) & (all_dummy_interpolate['day'] < 20)]
 
-train_dummy = all_dummy_interpolate[all_dummy_interpolate['train'] == 1]
-(trainingData_dummy, testData_dummy) = train_test_split(train_dummy, test_size=0.2, random_state=101)
-
-(trainingData_no_dummy, testData_no_dummy) = train_test_split(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] == 1], test_size=0.2, random_state=101)
+trainingData_no_dummy = all_no_dummy_interpolate[all_no_dummy_interpolate['day'] <= 15]
+testData_no_dummy = all_no_dummy_interpolate[(all_no_dummy_interpolate['day'] > 15) & (all_no_dummy_interpolate['day'] < 20)]
 
 
 # ** Create Apache Spark Data Frames ** 
 
-# In[ ]:
+# In[84]:
 
 spark_train_dummy = sqlContext.createDataFrame(trainingData_dummy)
 spark_test_dummy = sqlContext.createDataFrame(testData_dummy)
@@ -1174,12 +1144,10 @@ spark_test_no_dummy = sqlContext.createDataFrame(testData_no_dummy)
 
 # ** Prepare Kaggle test data. **
 
-# In[ ]:
-
-test_dummy = all_dummy_interpolate[all_dummy_interpolate['train'] != 1]
+# In[85]:
 
 # reset index for including datetime as column
-spark_Kaggle_test_dummy = sqlContext.createDataFrame(test_dummy.reset_index())
+spark_Kaggle_test_dummy = sqlContext.createDataFrame(all_dummy_interpolate[all_dummy_interpolate['train'] != 1].reset_index())
 spark_Kaggle_test_no_dummy = sqlContext.createDataFrame(all_no_dummy_interpolate[all_no_dummy_interpolate['train'] != 1].reset_index())
 
 
@@ -1187,24 +1155,24 @@ spark_Kaggle_test_no_dummy = sqlContext.createDataFrame(all_no_dummy_interpolate
 # ## 4.2 Format input data for machine learning
 # ** Apache Spark Machine Learning lib requires input as data frame transformed to labeled point. **
 
-# In[ ]:
+# In[86]:
 
 from pyspark.ml.linalg import Vectors
 DUMMY = True
 
 
-# In[ ]:
+# In[87]:
 
 columns_to_hide = added_cat_var + dependent_variables + dependent_variables_log                 + dependent_variables_bc + dependent_variables_cat + ['train','index', 'hour_cat']
 
 
-# In[ ]:
+# In[88]:
 
 dummy_cols = [x for x in spark_train_dummy.columns if x not in columns_to_hide]
 no_dummy_cols = [x for x in spark_train_no_dummy.columns if x not in columns_to_hide]
 
 
-# In[ ]:
+# In[89]:
 
 def transformToLabeledPoint(row) :
     retArray=[]
@@ -1224,7 +1192,7 @@ def transformToLabeledPoint(row) :
     return hour_cat, label_count, label_registered, label_casual, Vectors.dense(retArray)
 
 
-# In[ ]:
+# In[90]:
 
 def transformToLabeledPointKaggle(row) :
     retArray=[]
@@ -1243,7 +1211,9 @@ def transformToLabeledPointKaggle(row) :
     return hour_cat, datetime,0,0, Vectors.dense(retArray)
 
 
-# In[ ]:
+# ** ChiSqSelector used for feature selection. **
+
+# In[91]:
 
 def transformToLabeledPointChiSqSelector(row) :
     retArray=[]
@@ -1265,7 +1235,7 @@ def transformToLabeledPointChiSqSelector(row) :
 
 # ** Preparation Apache Spark data frame for linear regression **
 
-# In[ ]:
+# In[92]:
 
 DUMMY = True
 trainingData_dummy = sqlContext.createDataFrame(spark_train_dummy.rdd.map(transformToLabeledPoint), ["hour_cat", "label_count", "label_registered", "label_casual", "features_to_filter"])
@@ -1276,7 +1246,7 @@ chiSq_dummy = sqlContext.createDataFrame(spark_train_dummy.unionAll(spark_test_d
 
 # ** Preparation Apache Spark data frame for random forest and gradient boosted regression. No need for dummy variables. **
 
-# In[ ]:
+# In[93]:
 
 DUMMY = False
 trainingData_no_dummy = sqlContext.createDataFrame(spark_train_no_dummy.rdd.map(transformToLabeledPoint), ["hour_cat", "label_count", "label_registered", "label_casual", "features_to_filter"])
@@ -1287,7 +1257,7 @@ chiSq_no_dummy = sqlContext.createDataFrame(spark_train_no_dummy.unionAll(spark_
 
 # ** Cache spark data frames into memory for faster computation **
 
-# In[ ]:
+# In[94]:
 
 trainingData_dummy.cache()
 trainingData_dummy.count()
@@ -1295,7 +1265,7 @@ trainingData_no_dummy.cache()
 trainingData_no_dummy.count()
 
 
-# In[ ]:
+# In[95]:
 
 testData_dummy.cache()
 testData_dummy.count()
@@ -1303,7 +1273,7 @@ testData_no_dummy.cache()
 testData_no_dummy.count()
 
 
-# In[ ]:
+# In[96]:
 
 testKaggle_dummy.cache()
 testKaggle_dummy.count()
@@ -1313,7 +1283,7 @@ testKaggle_no_dummy.count()
 
 # ** To treat categorical variables as nominal we must first index them by featureIndexer. Features with number of unique values above maxCategories will be treated as continuous. **
 
-# In[ ]:
+# In[97]:
 
 from pyspark.ml.feature import VectorIndexer
 
@@ -1325,7 +1295,7 @@ featureIndexer =    VectorIndexer(inputCol="features_to_filter", outputCol="inde
 # ** Now its time to train and tune our model on training data using k-fold cross validation method! **
 # 
 
-# In[ ]:
+# In[98]:
 
 from pyspark.ml import Pipeline
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
@@ -1336,11 +1306,10 @@ from pyspark.ml.regression import RandomForestRegressor
 from pyspark.ml.regression import GBTRegressor
 from pyspark.ml.feature import ChiSqSelector
 from pyspark.ml.linalg import Vectors
+from pyspark.ml.tuning import TrainValidationSplit
 
 
-# ** As mentioned before, LinearRegression for good performance needs data with dummy variables. **
-
-# In[ ]:
+# In[99]:
 
 def make_prediction(models_dict, feature_selector, hour_cat, dummy=False, Kaggle=False):
      
@@ -1366,9 +1335,9 @@ def make_prediction(models_dict, feature_selector, hour_cat, dummy=False, Kaggle
     return predictionsTestData_r, predictionsTestData_c, predictionsTestData_count
 
 
-# ** Function for evaluation metrics, support both functionalities: rounded predictions and not. **
+# ** Function for evaluation metrics, support both functionalities: evaluate rounded predictions and not. **
 
-# In[ ]:
+# In[100]:
 
 def evaluate_prediction(predictionsTestData_r, predictionsTestData_c, predictionsTestData_count, lambdas, rounded=True):
     print("Evaluation prediction for registred users:")
@@ -1414,7 +1383,7 @@ def evaluate_prediction(predictionsTestData_r, predictionsTestData_c, prediction
     return prediction_dict
 
 
-# In[ ]:
+# In[101]:
 
 def evaluate_all_prediction(all_registered, all_casual, all_sum, all_count, rounded=True):
     print("Evaluation prediction for registred users:")
@@ -1442,17 +1411,17 @@ def evaluate_all_prediction(all_registered, all_casual, all_sum, all_count, roun
 
 # ** Function for mixing predictions from two different models together with respect to specifc ratio rate. **
 
-# In[ ]:
+# In[102]:
 
 def evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_count, ratio=0.5, rounded=True):
 
     print("Evaluation mixed (ratio=" + str(ratio) + ") prediction for sum of both models: registred + casual users:")
-    mixed_pandas_sum = ratio * rf_all_sum + (1.0 - ratio) * gbt_all_sum
+    mixed_pandas_sum = ratio * rf_all_sum[['label_count', 'prediction']] + (1.0 - ratio) * gbt_all_sum[['label_count', 'prediction']]
     rmsle_sum = evaluateMetrics(mixed_pandas_sum, 'label_count', lmbd={}, rollback=False, rounded=rounded)
     print()
 
     print("Evaluation mixed (ratio=" + str(ratio) + ") prediction for one count users model:")
-    mixed_pandas_count = ratio * rf_all_count + (1.0 - ratio) * gbt_all_count
+    mixed_pandas_count = ratio * rf_all_count[['label_count', 'prediction']] + (1.0 - ratio) * gbt_all_count[['label_count', 'prediction']]
     rmsle_count = evaluateMetrics(mixed_pandas_count, 'label_count', lmbd={}, rollback=False, rounded=rounded)
     
     mixed_prediction_dict = {'sum': mixed_pandas_sum.copy(),
@@ -1465,7 +1434,7 @@ def evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_cou
 
 # ** Function for final prediction for Kaggle test dataset. Support mixing prediction with specific ratio. Final sum of predictions is rounded. **
 
-# In[ ]:
+# In[103]:
 
 def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,                         gbtr_predictionsTestData_r, gbtr_predictionsTestData_c, lambdas, ratio=0.5):
     
@@ -1480,16 +1449,22 @@ def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,     
     # 3. Predicted values have to be numerical
     # 4. labelCol is set to '' becouse Kaggle test dataset doesn't have one
     
-    
-    rf_pandas_pred_r = undo_bc_transform(rf_predictionsTestData_r.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['registered'], Kaggle=True)
-    rf_pandas_pred_c = undo_bc_transform(rf_predictionsTestData_c.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['casual'], Kaggle=True)
-    gbtr_pandas_pred_r = undo_bc_transform(gbtr_predictionsTestData_r.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['registered'], Kaggle=True)
-    gbtr_pandas_pred_c = undo_bc_transform(gbtr_predictionsTestData_c.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['casual'], Kaggle=True)
+    rf_pandas_pred_r = rf_predictionsTestData_r.toPandas().drop(['features'], axis = 1).copy()
+    rf_pandas_pred_c = rf_predictionsTestData_c.toPandas().drop(['features'], axis = 1).copy()
+    gbtr_pandas_pred_r = gbtr_predictionsTestData_r.toPandas().drop(['features'], axis = 1).copy()
+    gbtr_pandas_pred_c = gbtr_predictionsTestData_c.toPandas().drop(['features'], axis = 1).copy()
     
     rf_pandas_pred_r.loc[(rf_pandas_pred_r['prediction'] < 0), 'prediction'] = 0
     rf_pandas_pred_c.loc[(rf_pandas_pred_c['prediction'] < 0), 'prediction'] = 0
     gbtr_pandas_pred_r.loc[(gbtr_pandas_pred_r['prediction'] < 0), 'prediction'] = 0
     gbtr_pandas_pred_c.loc[(gbtr_pandas_pred_c['prediction'] < 0), 'prediction'] = 0
+    
+    rf_pandas_pred_r = undo_bc_transform(rf_pandas_pred_r, labelCol='', lmbd=lambdas['registered'], Kaggle=True)
+    rf_pandas_pred_c = undo_bc_transform(rf_pandas_pred_c, labelCol='', lmbd=lambdas['casual'], Kaggle=True)
+    gbtr_pandas_pred_r = undo_bc_transform(gbtr_pandas_pred_r, labelCol='', lmbd=lambdas['registered'], Kaggle=True)
+    gbtr_pandas_pred_c = undo_bc_transform(gbtr_pandas_pred_c, labelCol='', lmbd=lambdas['casual'], Kaggle=True)
+    
+
     
     pandas_pred_sum = rf_pandas_pred_r.copy()
     pandas_pred_sum['count'] = 0.0
@@ -1501,14 +1476,22 @@ def predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c,     
     return pandas_pred_sum.rename(columns={"label_count": "datetime"})[['datetime','count']]
 
 
-# In[ ]:
+# ** Function to compute score for mixed score for COUNT. Later on we will use better predictions: SUM (casual + registered separately) or COUNT. Unfortunatelly we can choose better one only by comparing results from Kaggle webstite. :-)**
+
+# In[104]:
 
 def predict_count_Kaggle_test(rf_predictionsTestData_c, gbtr_predictionsTestData_c, lambdas, ratio=0.5):
     
-    rf_pandas_pred_c = undo_bc_transform(rf_predictionsTestData_c.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['count'], Kaggle=True)    
-    gbtr_pandas_pred_c = undo_bc_transform(gbtr_predictionsTestData_c.toPandas().drop(['features'], axis = 1), labelCol='', lmbd=lambdas['count'], Kaggle=True)    
+    
+    rf_pandas_pred_c = rf_predictionsTestData_c.toPandas().drop(['features'], axis = 1).copy()
+    gbtr_pandas_pred_c = gbtr_predictionsTestData_c.toPandas().drop(['features'], axis = 1).copy()
+    
     rf_pandas_pred_c.loc[(rf_pandas_pred_c['prediction'] < 0), 'prediction'] = 0  
     gbtr_pandas_pred_c.loc[(gbtr_pandas_pred_c['prediction'] < 0), 'prediction'] = 0
+    
+    rf_pandas_pred_c = undo_bc_transform(rf_pandas_pred_c, labelCol='', lmbd=lambdas['count'], Kaggle=True)    
+    gbtr_pandas_pred_c = undo_bc_transform(gbtr_pandas_pred_c, labelCol='', lmbd=lambdas['count'], Kaggle=True)    
+
     
     pandas_pred_sum = rf_pandas_pred_c.copy()
     pandas_pred_sum['count'] = 0.0
@@ -1520,7 +1503,9 @@ def predict_count_Kaggle_test(rf_predictionsTestData_c, gbtr_predictionsTestData
     return pandas_pred_sum.rename(columns={"label_count": "datetime"})[['datetime','count']]
 
 
-# In[ ]:
+# ** Concatenate all hour_cat in one pandas dataFrame. **
+
+# In[105]:
 
 def concatenate_Kaggle_predictions(pred_sum_dict, pred_count_dict):
     # initialize with data from first hour_cat and then append rest hour categories
@@ -1535,7 +1520,7 @@ def concatenate_Kaggle_predictions(pred_sum_dict, pred_count_dict):
     return all_sum.reset_index(drop=True), all_count.reset_index(drop=True)
 
 
-# In[ ]:
+# In[106]:
 
 def concatenate_predictions(pred_dict):
     # initialize with data from first hour_cat and then append rest hour categories
@@ -1555,196 +1540,75 @@ def concatenate_predictions(pred_dict):
 
 
 # ___
-# # 4.4 K-Fold Cross Validation
-# ##  4.4.1 Linear Regression
-# We now treat the Pipeline as an Estimator, wrapping it in a CrossValidator instance. This will allow us to jointly choose parameters for all Pipeline stages. A CrossValidator requires an Estimator, a set of Estimator ParamMaps, and an Evaluator. We use a ParamGridBuilder to construct a grid of parameters to search over. 
+# # 4.4 Train Models
 
-# <table class="table">
-#   <thead>
-#     <tr><th></th><th>regularizer $R(w)$</th><th>gradient or sub-gradient</th></tr>
-#   </thead>
-#   <tbody>
-#     <tr>
-#       <td>zero (unregularized)</td><td>0</td><td>0</td>
-#     </tr>
-#     <tr>
-#       <td>L2</td><td>$\frac{1}{2}\|w\|^2$</td><td>$w$</td>
-#     </tr>
-#     <tr>
-#       <td>L1</td><td>$\|w\|$</td><td>$\mathrm{sign}(w)$</td>
-#     </tr>
-#     <tr>
-#       <td>elastic net</td><td>$\alpha \|w\| + (1-\alpha)\frac{1}{2}\|w\|^2$</td><td>$\alpha \mathrm{sign}(w) + (1-\alpha) w$</td>
-#     </tr>
-#   </tbody>
-# </table>
-# Here sign(w) is the vector consisting of the signs (±1) of all the entries of $w$.
-# L2-regularized problems are generally easier to solve than L1-regularized due to smoothness. However, L1 regularization can help promote sparsity in weights leading to smaller and more interpretable models, the latter of which can be useful for feature selection. Elastic net is a combination of L1 and L2 regularization. It is not recommended to train models without any regularization, especially when the number of training examples is small.
-
-# In[ ]:
-
-# lr = LinearRegression(maxIter=1000)
-
-# lr_cv_models_dict = {}
-
-# regParam = [0.01, 0.001, 0.0001, 0.00001]
-# elasticNetParam = [0, 0.25, 0.5, 0.75, 1.0]
-
-
-# pipeline = Pipeline(stages=[lr])
-
-# for label in ['label_registered','label_casual', 'label_count']: 
-#     paramGrid = ParamGridBuilder() \
-#         .addGrid(lr.regParam, regParam) \
-#         .addGrid(lr.elasticNetParam, elasticNetParam) \
-#         .addGrid(lr.labelCol, [label]) \
-#         .build()
-
-#     crossval = CrossValidator(estimator=pipeline,
-#                               estimatorParamMaps=paramGrid,
-#                               evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
-#                               numFolds=5)  # (5x5)x5 = 125 models to check  
-    
-#     start = time.time()
-    
-#     # Run cross-validation, and choose the best set of parameters on dummy dataset.
-#     # trainingData_dummy + testData_dummy = whole Kaggle Train data, we separarated this sets to simply evaluate models
-#     # we cross-validate on whole Kaggle train data to find best params to predict whole Kaggle Test set
-    
-#     # use only features chosen before by ChiSqSelector 
-#     cvModel = crossval.fit(feature_selector_dummy[label].transform(trainingData_dummy.unionAll(testData_dummy)))
-#     print("======= CV for " + label + " =========")
-#     end = time.time()
-    
-#     print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
-#     bestModel = cvModel.bestModel.stages[0]._java_obj
-#     print("RegParam: " + str(bestModel.getRegParam()))
-#     print("ElasticNetParam: "   + str(bestModel.getElasticNetParam()))
-#     lr_cv_models_dict[label] = cvModel
-#     print()
-
-
-# 
-# 
-# Now that we have fit our model, let's evaluate its performance by predicting off the test values with the best values from cross validation!.
-
-# In[ ]:
-
-# lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count = make_prediction(lr_cv_models_dict, dummy=True)
-
-
-# 
-# 
-# Let's evaluate our model performance by calculating the evaluation metrics.
-#  Calculate the Mean Absolute Error, Mean Squared Error, Root Mean Squared Error, and the Root Mean Squared Log Error . Refer cell above for the formulas.
-
-# In[ ]:
-
-# lr_pred_dict = evaluate_prediction(lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count)
-
-
-# In[ ]:
-
-# coefficients = pd.DataFrame(LinearRegression(regParam=0.00001, elasticNetParam=0.25, maxIter=1000)\
-#                             .setLabelCol('label_count')
-#                             .fit(feature_selector_dummy[label].transform(trainingData_dummy))
-#                             .coefficients.array,
-#                             [dummy_cols[i] for i in feature_selector_dummy[label].selectedFeatures])
-# coefficients.columns = ['Coefficient']
-
-
-# ** Hour variables have the biggest coefficients values in linera regression equation. Amongs them, peak hours have the biggest one. **
-
-# In[ ]:
-
-# plt.figure(figsize=(12,20))
-# sns.heatmap(coefficients, cmap='coolwarm')
-
-
-# 
-# 
-# Let's quickly explore the residuals to make sure everything was okay with our data. 
-# It's good idea to plot a histogram of the residuals and make sure it looks normally distributed.
-
-# In[ ]:
-
-# plt.scatter(lr_pred_dict['sum']['label_count'],lr_pred_dict['sum']['prediction'])
-# plt.xlabel('Y Test')
-# plt.ylabel('Predicted Y')
-# plt.title('Linear Regression')
-
-
-# ** Create a scatterplot of the real test values versus the predicted values. **
-
-# In[ ]:
-
-# sns.distplot((lr_pred_dict['sum']['label_count'] - lr_pred_dict['sum']['prediction']),bins=50);
-# plt.xlabel('Linear Regression Residuals')
-
-
-# ___
-# ## 4.4.2 ChiSquare Test & Decision Tree for feature selection
-# Decision trees are a popular family of classification and regression methods. We will use them as step before ensemled models training, to verify feature selection from ChiSqSelector for no_dummy option as well as to verify new subsets of features to minimalize loss function. 
+# ## 4.4.1 ChiSquare Test & Decision Tree for feature selection
+# Decision trees are a popular family of classification and regression methods. We will use them as step before ensemled models training, to verify subsets of features to minimalize loss function. 
 # 
 
 # ** Let's find out how  number of chosen features impacts RMSLE metric. **
 
-# In[ ]:
+# In[107]:
 
-dt = DecisionTreeRegressor(maxDepth=15, minInstancesPerNode=10, featuresCol="features")
+dt = DecisionTreeRegressor(maxDepth=30, minInstancesPerNode=10, featuresCol="features")
 dt_cv_models_dict = {}
 selector_no_dummy_dict = {}
 rmsle_hour_cat = {}
 
 
-# In[ ]:
+# #### COMMENTED
+# ** Code below is commented becouse it's time consuming. Instead, we load  by pickle previously computed results. **
 
-for hour_cat in hour_cat_list[4:]:
+# In[108]:
+
+# for hour_cat in hour_cat_list:
     
-    rmsle_registered = []
-    rmsle_casual = []
-    rmsle_sum = []
-    rmsle_count = []
+#     rmsle_registered = []
+#     rmsle_casual = []
+#     rmsle_sum = []
+#     rmsle_count = []
     
-    for num in range(1,len(no_dummy_cols) + 1):
-        for label in ["label_count", "label_registered", "label_casual"]:
+#     for num in range(1,len(no_dummy_cols) + 1):
+#         for label in ["label_count", "label_registered", "label_casual"]:
 
-            selector_no_dummy = ChiSqSelector(selectorType="numTopFeatures", fpr=0.01, numTopFeatures=num,                                               featuresCol="indexedFeatures",outputCol="features", labelCol=label + "_cat")
+#             selector_no_dummy = ChiSqSelector(selectorType="numTopFeatures", fpr=0.01, numTopFeatures=num, \
+#                                               featuresCol="indexedFeatures",outputCol="features", labelCol=label + "_cat")
 
-            selected_features_no_dummy = selector_no_dummy.fit(featureIndexer                                                       .transform(chiSq_no_dummy.filter(chiSq_no_dummy.hour_cat == hour_cat)))
+#             selected_features_no_dummy = selector_no_dummy.fit(featureIndexer \
+#                                                       .transform(chiSq_no_dummy.filter(chiSq_no_dummy.hour_cat == hour_cat)))
 
-            pipeline = Pipeline(stages=[featureIndexer, selected_features_no_dummy, dt.setLabelCol(label)])
-            model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
-            dt_cv_models_dict[label] = model
-            selector_no_dummy_dict[label] = selected_features_no_dummy
+#             pipeline = Pipeline(stages=[featureIndexer, selected_features_no_dummy, dt.setLabelCol(label)])
+#             model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
+#             dt_cv_models_dict[label] = model
+#             selector_no_dummy_dict[label] = selected_features_no_dummy
         
-        print("\n==========================================")
-        print("Category: " + str(hour_cat) + ", using " + str(num) + " best features")
-        print("==========================================")
-        dt_predictionsTestData_r, dt_predictionsTestData_c, dt_predictionsTestData_count = make_prediction(dt_cv_models_dict, selector_no_dummy_dict, hour_cat, dummy=False)
-        dt_pred_dict = evaluate_prediction(dt_predictionsTestData_r, dt_predictionsTestData_c, dt_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat])
-        rmsle_registered.append(dt_pred_dict['rmsle_r'])
-        rmsle_casual.append(dt_pred_dict['rmsle_c'])
-        rmsle_sum.append(dt_pred_dict['rmsle_sum'])
-        rmsle_count.append(dt_pred_dict['rmsle_count'])
+#         print("\n==========================================")
+#         print("Category: " + str(hour_cat) + ", using " + str(num) + " best features")
+#         print("==========================================")
+#         dt_predictionsTestData_r, dt_predictionsTestData_c, dt_predictionsTestData_count = make_prediction(dt_cv_models_dict, selector_no_dummy_dict, hour_cat, dummy=False)
+#         dt_pred_dict = evaluate_prediction(dt_predictionsTestData_r, dt_predictionsTestData_c, dt_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat])
+#         rmsle_registered.append(dt_pred_dict['rmsle_r'])
+#         rmsle_casual.append(dt_pred_dict['rmsle_c'])
+#         rmsle_sum.append(dt_pred_dict['rmsle_sum'])
+#         rmsle_count.append(dt_pred_dict['rmsle_count'])
 
-    rmsle_hour_cat[hour_cat] = {'registered' : rmsle_registered, 
-                                'casual' : rmsle_casual, 
-                                'sum': rmsle_sum, 
-                                'count' : rmsle_count}
+#     rmsle_hour_cat[hour_cat] = {'registered' : rmsle_registered, 
+#                                 'casual' : rmsle_casual, 
+#                                 'sum': rmsle_sum, 
+#                                 'count' : rmsle_count}
 
 
 # ** Load previously computed metrics score. **
 
-# In[ ]:
+# In[109]:
 
 #pickle.dump(rmsle_hour_cat, open( "../data/rmsle_hour_cat.p", "wb" ))
 rmsle_hour_cat = pickle.load( open( "../data/rmsle_hour_cat.p", "rb" ) )
 
 
-# ** From the plots below it's clear that different features number with the smallest p-Value do the job for different hour categories. Increasing number of features above some some level doesn't lead to any metric improvemnt and there is a risk of overfitting. Feature hour -  has the biggest impact on minimizing final score.  **
+# ** From the plots below it's clear that different features number with the smallest p-Value do the job for different hour categories. Increasing number of features above some some level doesn't lead to any metric improvemnt and there is a risk of overfitting. Feature 'hour' -  has the biggest impact on minimizing final score.  **
 
-# In[ ]:
+# In[110]:
 
 for hour_cat in hour_cat_list:
     fig = plt.figure(figsize=(12,4))
@@ -1759,33 +1623,42 @@ for hour_cat in hour_cat_list:
     plt.legend()
 
 
-# ** From the plots above we can set number of features for each hour_cat separately to minimize Sum RMSLE. **
+# ** From the plots above we can set number of features for each hour_cat separately to minimize Sum RMSLE. For same cases we should use all features to minimize RMSLE best, but in those scenarios models are proned to overfitting. We use threshold for number of chosen features. We set min number features useful for random forest regression.**
 
-# In[ ]:
+# In[125]:
 
+min_num_features = 12
+max_num_features = 17
 feat_num_hour_cat = {}
 for hour_cat in hour_cat_list:
-        feat_num_hour_cat[hour_cat] = {'label_registered' : rmsle_hour_cat[hour_cat]['registered']                                       .index(min(rmsle_hour_cat[hour_cat]['registered'])) + 1,
-                                      'label_casual' : rmsle_hour_cat[hour_cat]['casual']\
-                                       .index(min(rmsle_hour_cat[hour_cat]['casual'])) + 1,
-                                      'label_count' : rmsle_hour_cat[hour_cat]['count']\
-                                       .index(min(rmsle_hour_cat[hour_cat]['count'])) + 1}
+        feat_num_hour_cat[hour_cat] = {'label_registered' : rmsle_hour_cat[hour_cat]['registered'][:max_num_features]                                       .index(min(rmsle_hour_cat[hour_cat]['registered'][:max_num_features])) + 1,
+                                      'label_casual' : rmsle_hour_cat[hour_cat]['casual'][:max_num_features]\
+                                       .index(min(rmsle_hour_cat[hour_cat]['casual'][:max_num_features])) + 1,
+                                      'label_count' : rmsle_hour_cat[hour_cat]['count'][:max_num_features]\
+                                       .index(min(rmsle_hour_cat[hour_cat]['count'][:max_num_features])) + 1}
 
 
-# In[ ]:
+# In[126]:
+
+for hour_cat in hour_cat_list:
+        for label in ['label_registered', 'label_casual', 'label_count']:
+            if (feat_num_hour_cat[hour_cat][label] < min_num_features): feat_num_hour_cat[hour_cat][label] = min_num_features
+
+
+# In[127]:
 
 feat_num_hour_cat
 
 
-# ** Prepare ChiSquare Selector ( https://en.wikipedia.org/wiki/Chi-squared_test ) to choose best features to our models based on feat_num_hour_cat. **
+# ** Prepare ChiSquare Selector ( https://en.wikipedia.org/wiki/Chi-squared_test ) to choose best features to our models based on feat_num_hour_cat. For dummy option select all features with p-Value below 0.05 **
 
-# In[ ]:
+# In[128]:
 
 feature_selector_dummy = {}
 feature_selector_no_dummy = {}
 
 
-# In[ ]:
+# In[129]:
 
 for hour_cat in hour_cat_list:
     
@@ -1819,10 +1692,10 @@ for hour_cat in hour_cat_list:
 
 # ** Verify final feature selection results on Decision Tree model. **
 
-# In[ ]:
+# In[130]:
 
 # Train a DecisionTree model.
-dt = DecisionTreeRegressor(maxDepth=15, minInstancesPerNode=10, featuresCol="features")
+dt = DecisionTreeRegressor(maxDepth=30, minInstancesPerNode=10, featuresCol="features")
 dt_cv_models_dict = {}
 
 for hour_cat in hour_cat_list:
@@ -1832,10 +1705,11 @@ for hour_cat in hour_cat_list:
         pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[hour_cat][label], dt.setLabelCol(label)])
         model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
         dt_cv_models[label] = model
+        print("Train for hour_cat " + str(hour_cat) + " and " + label + " done.")
     dt_cv_models_dict[hour_cat] = dt_cv_models
 
 
-# In[ ]:
+# In[131]:
 
 dt_pred_dict = {}
 for hour_cat in hour_cat_list:
@@ -1846,46 +1720,134 @@ for hour_cat in hour_cat_list:
     dt_pred_dict[hour_cat] = evaluate_prediction(dt_predictionsTestData_r, dt_predictionsTestData_c, dt_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat])
 
 
-# In[ ]:
+# In[132]:
 
 dt_all_registered, dt_all_casual, dt_all_sum, dt_all_count = concatenate_predictions(dt_pred_dict)
 dt_all_evaluated = evaluate_all_prediction(dt_all_registered, dt_all_casual, dt_all_sum, dt_all_count)
 
 
-# ** We got result 0.3630 on simple decision tree. Looks primising. Let's visualize results. **
+# ** We got result 0.3914 on simple decision tree. Looks primising. **
 
-# In[ ]:
+# ___
+# ##  4.4.2 Linear Regression
+# We now treat the Pipeline as an Estimator, wrapping it in a CrossValidator instance. This will allow us to jointly choose parameters for all Pipeline stages. A CrossValidator requires an Estimator, a set of Estimator ParamMaps, and an Evaluator. We use a ParamGridBuilder to construct a grid of parameters to search over. 
 
-fig,axes= plt.subplots(nrows=3, ncols=2, figsize=(8,5))
+# <table class="table">
+#   <thead>
+#     <tr><th></th><th>regularizer $R(w)$</th><th>gradient or sub-gradient</th></tr>
+#   </thead>
+#   <tbody>
+#     <tr>
+#       <td>zero (unregularized)</td><td>0</td><td>0</td>
+#     </tr>
+#     <tr>
+#       <td>L2</td><td>$\frac{1}{2}\|w\|^2$</td><td>$w$</td>
+#     </tr>
+#     <tr>
+#       <td>L1</td><td>$\|w\|$</td><td>$\mathrm{sign}(w)$</td>
+#     </tr>
+#     <tr>
+#       <td>elastic net</td><td>$\alpha \|w\| + (1-\alpha)\frac{1}{2}\|w\|^2$</td><td>$\alpha \mathrm{sign}(w) + (1-\alpha) w$</td>
+#     </tr>
+#   </tbody>
+# </table>
+# Here sign(w) is the vector consisting of the signs (±1) of all the entries of $w$.
+# L2-regularized problems are generally easier to solve than L1-regularized due to smoothness. However, L1 regularization can help promote sparsity in weights leading to smaller and more interpretable models, the latter of which can be useful for feature selection. Elastic net is a combination of L1 and L2 regularization. It is not recommended to train models without any regularization, especially when the number of training examples is small.
 
-sns.distplot(all_registered['label_registered'], bins = 24, ax=axes[0][0])
-sns.distplot(all_registered['prediction'], bins = 24, ax=axes[0][1], color='blue')
-sns.distplot(all_casual['label_casual'], bins = 24, ax=axes[1][0])
-sns.distplot(all_casual['prediction'], bins = 24, ax=axes[1][1], color='blue')
-sns.distplot(all_count['label_count'], bins = 24, ax=axes[2][0])
-sns.distplot(all_count['prediction'], bins = 24, ax=axes[2][1], color='blue')
+# ###  K-fold Cross Validation
+
+# In[177]:
+
+lr_cv_models_dict = {}
+
+
+# In[178]:
+
+lr = LinearRegression()
+
+regParam = [1.0, 0.5, 0.1, 0.01, 0.001]
+elasticNetParam = [0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+
+for hour_cat in hour_cat_list:
+    lr_cv_models = {}
+    
+    for label in ['label_registered','label_casual', 'label_count']: 
+        
+        pipeline = Pipeline(stages=[lr])
+        paramGrid = ParamGridBuilder()             .addGrid(lr.regParam, regParam)             .addGrid(lr.elasticNetParam, elasticNetParam)             .addGrid(lr.labelCol, [label])             .build()
+
+        crossval = TrainValidationSplit(estimator=pipeline,
+                                  estimatorParamMaps=paramGrid,
+                                  evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
+                                  trainRatio=0.75)  # (5x10) = 50 models to check  
+
+        start = time.time()
+
+        # Run cross-validation, and choose the best set of parameters on dummy dataset.
+        # trainingData_dummy + testData_dummy = whole Kaggle Train data, we separarated this sets to simply evaluate models
+        # we cross-validate on whole Kaggle train data to find best params to predict whole Kaggle Test set
+
+        # use only features chosen before by ChiSqSelector 
+        cvModel = crossval.fit(feature_selector_dummy[hour_cat][label].transform(                                 trainingData_dummy.filter(trainingData_dummy.hour_cat == hour_cat)                               .unionAll(testData_dummy.filter(testData_dummy.hour_cat == hour_cat))))
+        end = time.time()
+        print("======= CV for hour_cat " + str(hour_cat) + " and " + label +  " =========")
+        print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
+        bestModel = cvModel.bestModel.stages[0]._java_obj
+        print("RegParam: " + str(bestModel.getRegParam()))
+        print("ElasticNetParam: "   + str(bestModel.getElasticNetParam()))
+        lr_cv_models[label] = cvModel
+        print()
+    lr_cv_models_dict[hour_cat] = lr_cv_models
+
+
+# 
+# 
+# Now that we have fit our model, let's evaluate its performance by predicting off the test values with the best values from cross validation!.
+
+# In[180]:
+
+lr_pred_dict = {}
+for hour_cat in hour_cat_list:
+    print("\n==========================================")
+    print("Category: " + str(hour_cat))
+    print("==========================================")
+    lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count = make_prediction(lr_cv_models_dict[hour_cat], feature_selector_dummy[hour_cat], hour_cat, dummy=True)
+    lr_pred_dict[hour_cat] = evaluate_prediction(lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat])
+
+
+# 
+# 
+# Let's evaluate our model performance by calculating the evaluation metrics. ** We achieved better result 0.3454 vs 0.3914 from simple decision tree. **
+
+# In[181]:
+
+lr_all_registered, lr_all_casual, lr_all_sum, lr_all_count = concatenate_predictions(lr_pred_dict)
+lr_all_evaluated = evaluate_all_prediction(lr_all_registered, lr_all_casual, lr_all_sum, lr_all_count)
+
+
+# ** Create a scatterplot of the real test values versus the predicted values. **
+
+# 
+# 
+# Let's quickly explore the residuals to make sure everything was okay with our data. 
+# It's good idea to plot a histogram of the residuals and make sure it looks normally distributed.
+
+# In[182]:
+
+fig,axes= plt.subplots(nrows=1, ncols=2, figsize=(12,5))
+
+axes[0].scatter(lr_all_sum['label_count'],lr_all_sum['prediction'])
+axes[0].set_xlabel('Y Test')
+axes[0].set_ylabel('Predicted Y')
+axes[0].set_title('Linear Regression')
+
+#sns.distplot((lr_all_sum['label_count'] - lr_all_sum['prediction']),bins=64, ax=axes[1]);
+axes[1].hist(lr_all_sum['label_count'] - lr_all_sum['prediction'],bins=64)
+axes[1].set_xlabel('Linear Regression Residuals')
+
 plt.subplots_adjust(hspace = 0.3)
 plt.tight_layout
-
-
-# In[ ]:
-
-fig,axes= plt.subplots(nrows=5, ncols=2, figsize=(11,12))
-for hour_cat in hour_cat_list:       
-    sns.distplot(all_registered[all_registered['hour_cat'] == hour_cat]['label_registered'], bins = 24, ax=axes[hour_cat][0], axlabel='HOUR_CAT ' + str(hour_cat) + ', registered', color='orange')
-    sns.distplot(all_registered[all_registered['hour_cat'] == hour_cat]['prediction'], bins = 24, ax=axes[hour_cat][1], color='green')
-    plt.subplots_adjust(hspace = 0.3)
-    plt.tight_layout
-
-
-# In[ ]:
-
-fig,axes= plt.subplots(nrows=5, ncols=2, figsize=(11,12))
-for hour_cat in hour_cat_list:       
-    sns.distplot(all_registered[all_registered['hour_cat'] == hour_cat]['label_casual'], bins = 24, ax=axes[hour_cat][0], axlabel='HOUR_CAT ' + str(hour_cat) + ', casual', color='red')
-    sns.distplot(all_registered[all_registered['hour_cat'] == hour_cat]['prediction'], bins = 24, ax=axes[hour_cat][1], color='blue')
-    plt.subplots_adjust(hspace = 0.3)
-    plt.tight_layout
 
 
 # ___
@@ -1907,74 +1869,69 @@ for hour_cat in hour_cat_list:
 # 
 # <p>Apart from these randomizations, decision tree training is done in the same way as for individual decision trees.To make a prediction on a new instance, a random forest must aggregate the predictions from its set of decision trees. This aggregation is done differently for classification and regression.For regression each tree predicts a real value. The label is predicted to be the average of the tree predictions.</p>
 
-# In[ ]:
-
-# model = RandomForestRegressor(featuresCol="indexedFeatures")
-
-# numTrees = [50, 100, 200, 400, 800, 1000, 2000]
-# maxDepth =  [15, 20, 25, 30]
-# minInstancesPerNode = [5, 10, 15]
-# maxBins = [32, 64, 128]
-
-# rf_cv_models_dict = {}
-
-
-
-# for label in ['label_registered','label_casual', 'label_count']: 
-#     pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[label], model])
-#     paramGrid = ParamGridBuilder() \
-#         .addGrid(model.numTrees, numTrees) \
-#         .addGrid(model.maxDepth, maxDepth) \
-#         .addGrid(model.minInstancesPerNode, minInstancesPerNode) \
-#         .addGrid(model.maxBins, maxBins) \
-#         .addGrid(model.labelCol, [label]) \
-#         .build()
-
-#     crossval = CrossValidator(estimator=pipeline,
-#                               estimatorParamMaps=paramGrid,
-#                               evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
-#                               numFolds=4)  # (5x5)x5 = 125 models to check
-    
-#     start = time.time()
-#     cvModel = crossval.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
-#     print("======= CV for " + label + " =========")
-#     end = time.time()
-#     print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
-    
-#     bestModel = cvModel.bestModel.stages[0]._java_obj
-#     print("NumTrees: " + str(bestModel.getNumTrees()))
-#     print("MaxDepth: "   + str(bestModel.getMaxDepth()))
-#     print("MinInstancesPerNode: "   + str(bestModel.getMinInstancesPerNode()))
-#     print("MaxBins: "   + str(bestModel.getMaxBins()))
-#     rf_cv_models_dict[label] = cvModel
-#     print()
-
-
-# ** Create models with params from k-fold cross validation above manually becouse cross validation is very time consuming.  **
-
-# In[ ]:
+# In[141]:
 
 rf_cv_models_dict = {}
 
 
-# In[ ]:
+# In[146]:
 
-rf = RandomForestRegressor(numTrees=1000, maxDepth=15, minInstancesPerNode=10, featuresCol="features")
+rf = RandomForestRegressor()
+
+numTrees = [500, 1000]
+maxDepth =  [10, 15, 30]
+minInstancesPerNode = [10]
+maxBins = [32]
+
 
 for hour_cat in hour_cat_list:
     rf_cv_models = {}
     
-    for label in ['label_registered','label_casual', 'label_count']:     
-        pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[hour_cat][label], rf.setLabelCol(label)])
-        model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
-        rf_cv_models[label] = model
-        print("Train for hour_cat " + str(hour_cat) + " and " + label + " done.")
+    for label in ['label_registered','label_casual', 'label_count']: 
+        pipeline = Pipeline(stages=[rf])
+        paramGrid = ParamGridBuilder()             .addGrid(rf.numTrees, numTrees)             .addGrid(rf.maxDepth, maxDepth)             .addGrid(rf.minInstancesPerNode, minInstancesPerNode)             .addGrid(rf.maxBins, maxBins)             .addGrid(rf.labelCol, [label])             .build()
+
+        crossval = TrainValidationSplit(estimator=pipeline,
+                                  estimatorParamMaps=paramGrid,
+                                  evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
+                                  trainRatio=0.75)  # (2x3) = 4 models to check
+
+        start = time.time()
+        cvModel = crossval.fit(feature_selector_no_dummy[hour_cat][label].transform(                                featureIndexer.transform(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)                               .unionAll(testData_no_dummy.filter(testData_no_dummy.hour_cat == hour_cat)))))
+        print("======= CV for hour_cat " + str(hour_cat) + " and " + label +  " =========")
+        end = time.time()
+        print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
+
+        bestModel = cvModel.bestModel.stages[0]._java_obj
+        print("NumTrees: " + str(bestModel.getNumTrees()))
+        print("MaxDepth: "   + str(bestModel.getMaxDepth()))
+        print("MinInstancesPerNode: "   + str(bestModel.getMinInstancesPerNode()))
+        print("MaxBins: "   + str(bestModel.getMaxBins()))
+        rf_cv_models[label] = cvModel
+        print()
     rf_cv_models_dict[hour_cat] = rf_cv_models
+
+
+# ### COMMENTED - use either cv (time consuming) or  create models with common params for all models 
+
+# In[143]:
+
+# rf = RandomForestRegressor(numTrees=500, maxDepth=15, minInstancesPerNode=10, featuresCol="features")
+
+# for hour_cat in hour_cat_list:
+#     rf_cv_models = {}
+    
+#     for label in ['label_registered','label_casual', 'label_count']:     
+#         pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[hour_cat][label], rf.setLabelCol(label)])
+#         model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
+#         rf_cv_models[label] = model
+#         print("Train for hour_cat " + str(hour_cat) + " and " + label + " done.")
+#     rf_cv_models_dict[hour_cat] = rf_cv_models
 
 
 # ** Evaluate results in each hour_cat separately. **
 
-# In[ ]:
+# In[147]:
 
 rf_pred_dict = {}
 for hour_cat in hour_cat_list:
@@ -1985,28 +1942,30 @@ for hour_cat in hour_cat_list:
     rf_pred_dict[hour_cat] = evaluate_prediction(rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat])
 
 
-# ** Evaluate concatenated results. **
+# Evaluate concatenated results. ** We achieved better result 0.3086 vs 0.3509 from cv linear regression. Looks even better. **
 
-# In[ ]:
+# In[148]:
 
 rf_all_registered, rf_all_casual, rf_all_sum, rf_all_count = concatenate_predictions(rf_pred_dict)
 rf_all_evaluated = evaluate_all_prediction(rf_all_registered, rf_all_casual, rf_all_sum, rf_all_count)
 
 
-# In[ ]:
-
-plt.scatter(rf_all_sum['label_count'],rf_all_sum['prediction'])
-plt.xlabel('Y Test')
-plt.ylabel('Predicted Y')
-plt.title('Random Forest Regression')
-
-
 # ** Residuals should have normal distribution. Looks good. **
 
-# In[ ]:
+# In[149]:
 
-sns.distplot((rf_all_sum['label_count'] - rf_all_sum['prediction']),bins=50);
-plt.xlabel('Random Forest Regression Residuals')
+fig,axes= plt.subplots(nrows=1, ncols=2, figsize=(12,5))
+
+axes[0].scatter(rf_all_sum['label_count'],rf_all_sum['prediction'])
+axes[0].set_xlabel('Y Test')
+axes[0].set_ylabel('Predicted Y')
+axes[0].set_title('Random Forest Regression')
+
+axes[1].hist(rf_all_sum['label_count'] - rf_all_sum['prediction'],bins=64)
+axes[1].set_xlabel('Random Forest Regression Residuals')
+
+plt.subplots_adjust(hspace = 0.3)
+plt.tight_layout
 
 
 # ___
@@ -2029,74 +1988,78 @@ plt.xlabel('Random Forest Regression Residuals')
 # 
 # <p>In short, both algorithms can be effective, and the choice should be based on the particular dataset.</p>
 
-# In[ ]:
-
-# model = GBTRegressor(featuresCol="indexedFeatures")
-
-# minInstancesPerNode =  [7,8,9,10,11,12,15]
-# maxDepth =  [4,5,6,7,10,15]
-# maxIter = [100, 150, 300, 500]
-# maxBins = [32, 64, 128]
-# gbtr_cv_models_dict = {}
-
-
-
-# for label in ['label_registered','label_casual', 'label_count']: 
-#     pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[label], model])
-#     paramGrid = ParamGridBuilder() \
-#         .addGrid(model.minInstancesPerNode, minInstancesPerNode) \
-#         .addGrid(model.maxDepth, maxDepth) \
-#         .addGrid(model.maxIter, maxIter) \
-#         .addGrid(model.maxBins, maxBins) \
-#         .addGrid(model.labelCol, [label]) \
-#         .build()
-
-#     crossval = CrossValidator(estimator=pipeline,
-#                               estimatorParamMaps=paramGrid,
-#                               evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
-#                               numFolds=4)  # (5x5)x5 = 125 models to check
-    
-#     start = time.time()
-#     cvModel = crossval.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
-#     print("======= CV for " + label + " =========")
-#     end = time.time()
-#     print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
-    
-#     bestModel = cvModel.bestModel.stages[0]._java_obj
-#     print("MinInstancesPerNode: " + str(bestModel.getMinInstancesPerNode()))
-#     print("MaxDepth: "   + str(bestModel.getMaxDepth()))
-#     print("MaxIter: "   + str(bestModel.getMaxIter()))
-#     print("MaxBins: "   + str(bestModel.getMaxBins()))
-#     gbtr_cv_models_dict[label] = cvModel
-#     print()
-
-
-# In[ ]:
+# In[150]:
 
 gbt_cv_models_dict = {}
 
 
-# In[ ]:
+# ### COMMENTED - use either cv (time consuming) or  create models with common params for all models 
 
-gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxIter=250, featuresCol="features")
+# In[151]:
+
+gbt = GBTRegressor()
+
+maxDepth =  [4]
+maxIter = [30, 60, 90]
+minInstancesPerNode =  [10]
+maxBins = [32]
 
 for hour_cat in hour_cat_list:
     gbt_cv_models = {}
     
-    for label in ['label_registered','label_casual', 'label_count']:     
-        pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[hour_cat][label], gbt.setLabelCol(label)])
-        model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
-        gbt_cv_models[label] = model
-        print("Train for hour_cat " + str(hour_cat) + " and " + label + " done.")
+    for label in ['label_registered','label_casual', 'label_count']: 
+        pipeline = Pipeline(stages=[gbt])
+        paramGrid = ParamGridBuilder()             .addGrid(gbt.minInstancesPerNode, minInstancesPerNode)             .addGrid(gbt.maxDepth, maxDepth)             .addGrid(gbt.maxIter, maxIter)             .addGrid(gbt.maxBins, maxBins)             .addGrid(gbt.labelCol, [label])             .build()
+
+        crossval = TrainValidationSplit(estimator=pipeline,
+                                  estimatorParamMaps=paramGrid,
+                                  evaluator=RegressionEvaluator(labelCol=label, metricName="rmse"),
+                                  trainRatio=0.8)  # (3x3)x3 = 27 models to check
+
+        start = time.time()
+        cvModel = crossval.fit(feature_selector_no_dummy[hour_cat][label].transform(                                featureIndexer.transform(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)                               .unionAll(testData_no_dummy.filter(testData_no_dummy.hour_cat == hour_cat)))))
+        
+        print("======= CV for hour_cat " + str(hour_cat) + " and " + label +  " =========")
+        end = time.time()
+        print("Time taken to train model with k-fold cv: " + str(end - start) + " seconds")
+
+        bestModel = cvModel.bestModel.stages[0]._java_obj
+        print("MaxIter: "   + str(bestModel.getMaxIter()))
+        print("MaxDepth: "   + str(bestModel.getMaxDepth()))
+        print("MinInstancesPerNode: " + str(bestModel.getMinInstancesPerNode()))
+        print("MaxBins: "   + str(bestModel.getMaxBins()))
+        gbt_cv_models[label] = cvModel
+        print()
     gbt_cv_models_dict[hour_cat] = gbt_cv_models
+
+
+# In[152]:
+
+gbt_cv_models_dict
+
+
+# ** Cross validating GBTRegressor is very painfull so we train all hour_cat wiht common params. Probably loosing some accuracy. **
+
+# In[153]:
+
+# gbt = GBTRegressor(maxDepth=4, minInstancesPerNode=10, maxIter=100, featuresCol="features")
+
+# for hour_cat in hour_cat_list:
+#     gbt_cv_models = {}
+    
+#     for label in ['label_registered','label_casual', 'label_count']:     
+#         pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[hour_cat][label], gbt.setLabelCol(label)])
+#         model = pipeline.fit(trainingData_no_dummy.filter(trainingData_no_dummy.hour_cat == hour_cat)) 
+#         gbt_cv_models[label] = model
+#         print("Train for hour_cat " + str(hour_cat) + " and " + label + " done.")
+#     gbt_cv_models_dict[hour_cat] = gbt_cv_models
 
 
 # ** Evaluate results in each hour_cat separately. **
 
-# In[ ]:
+# In[154]:
 
 gbt_pred_dict = {}
-
 for hour_cat in hour_cat_list:
     print("\n==========================================")
     print("Category: " + str(hour_cat))
@@ -2107,30 +2070,80 @@ for hour_cat in hour_cat_list:
 
 # ** Evaluate concatenated results. **
 
-# In[ ]:
+# In[155]:
 
 gbt_all_registered, gbt_all_casual, gbt_all_sum, gbt_all_count = concatenate_predictions(gbt_pred_dict)
 gbt_all_evaluated = evaluate_all_prediction(gbt_all_registered, gbt_all_casual, gbt_all_sum, gbt_all_count)
 
 
-# In[ ]:
+# ** Visualize results. **
 
-plt.scatter(gbt_all_sum['label_count'],gbt_all_sum['prediction'])
-plt.xlabel('Y Test')
-plt.ylabel('Predicted Y')
-plt.title('Gradient Boosted Tree Regression')
+# In[156]:
+
+fig,axes= plt.subplots(nrows=3, ncols=2, figsize=(11,7))
+
+sns.distplot(gbt_all_registered['label_registered'], bins = 24, ax=axes[0][0])
+sns.distplot(gbt_all_registered['prediction'], bins = 24, ax=axes[0][1], color='blue')
+sns.distplot(gbt_all_casual['label_casual'], bins = 24, ax=axes[1][0])
+sns.distplot(gbt_all_casual['prediction'], bins = 24, ax=axes[1][1], color='blue')
+sns.distplot(gbt_all_count['label_count'], bins = 24, ax=axes[2][0])
+sns.distplot(gbt_all_count['prediction'], bins = 24, ax=axes[2][1], color='blue')
+plt.subplots_adjust(hspace = 0.3)
+plt.tight_layout
 
 
-# In[ ]:
+# ** Hour category 0 and 5 has the biggest RMSLE score: 0.3315 and 0.3702 accordingly. **
 
-sns.distplot((gbt_all_sum['label_count'] - gbt_all_sum['prediction']),bins=50);
-plt.xlabel('Gradient Boosted Tree Regression Residuals')
+# In[157]:
+
+fig,axes= plt.subplots(nrows=8, ncols=2, figsize=(11,19))
+for hour_cat in hour_cat_list:       
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['label_registered'], bins = 24, ax=axes[hour_cat][0], axlabel='HOUR_CAT ' + str(hour_cat) + ', registered', color='orange')
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['prediction'], bins = 24, ax=axes[hour_cat][1], color='green')
+    plt.subplots_adjust(hspace = 0.3)
+    plt.tight_layout
+
+
+# In[175]:
+
+fig,axes= plt.subplots(nrows=8, ncols=2, figsize=(11,19))
+for hour_cat in hour_cat_list:       
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['label_casual'], bins = 24, ax=axes[hour_cat][0], axlabel='HOUR_CAT ' + str(hour_cat) + ', registered', color='red')
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['prediction'], bins = 24, ax=axes[hour_cat][1], color='green')
+    plt.subplots_adjust(hspace = 0.3)
+    plt.tight_layout
+
+
+# In[176]:
+
+fig,axes= plt.subplots(nrows=8, ncols=2, figsize=(11,19))
+for hour_cat in hour_cat_list:       
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['label_count'], bins = 24, ax=axes[hour_cat][0], axlabel='HOUR_CAT ' + str(hour_cat) + ', registered', color='blue')
+    sns.distplot(gbt_all_registered[gbt_all_registered['hour_cat'] == hour_cat]['prediction'], bins = 24, ax=axes[hour_cat][1], color='green')
+    plt.subplots_adjust(hspace = 0.3)
+    plt.tight_layout
+
+
+# In[158]:
+
+fig,axes= plt.subplots(nrows=1, ncols=2, figsize=(12,5))
+
+axes[0].scatter(gbt_all_sum['label_count'],gbt_all_sum['prediction'])
+axes[0].set_xlabel('Y Test')
+axes[0].set_ylabel('Predicted Y')
+axes[0].set_title('Gradient Boosted Tree Regression')
+
+axes[1].hist(rf_all_sum['label_count'] - rf_all_sum['prediction'],bins=64)
+axes[1].set_xlabel('Gradient Boosted Tree Regression Residuals')
+
+plt.subplots_adjust(hspace = 0.3)
+plt.tight_layout
 
 
 # ___
 # # 5. Conclusion
 # 
-# We trained three machine learning algorithms. We used K-fold cross validation for parameter tuning. Of course we couldn't check all posibly combination due to computancy limitation. Especially Gradient Boosted Regression was hard to train becouse of its iterative manner. On the other hand it predicts very fast - this is one of the reason of its popularity (ex. for page rank cases). As we might suspect, non-linearity models gave us better results. Gradient Boosted Regression won the game with the score ** 0.3107 ** !
+# We trained three machine learning algorithms. We used K-fold cross validation for parameter tuning. Of course we couldn't check all posibly combination due to computancy limitation. Especially Gradient Boosted Regression was hard to train becouse of its iterative manner. On the other hand it predicts very fast - this is one of the reason of its popularity (ex. for page rank cases). As we might suspect, non-linearity models gave us better results. Gradient Boosted Regression won the game with the score ** 0.2544 ** !
 # <table>
 #   <col>
 #   <colgroup span="4"></colgroup>
@@ -2147,29 +2160,29 @@ plt.xlabel('Gradient Boosted Tree Regression Residuals')
 #   </tr>
 #   <tr>
 #     <th scope="row">Linear Regression</th>
-#     <td><div align="center">0.5539</div></td>
-#     <td>0.5867</td>  
-#     <td><div align="center">0.5333</div></td>
-#     <td>0.5472</td>   
+#     <td><div align="center">0.3366</div></td>
+#     <td>0.5566</td>  
+#     <td><div align="center">0.3454</div></td>
+#     <td>0.3474</td>   
 #   </tr>
 #   <tr>
 #     <th scope="row">Random Forest Regression</th>
-#     <td><div align="center">0.3445</div></td>
-#     <td>0.4889</td>
-#     <td><div align="center">0.3409</div></td>
-#     <td>0.3614</td>
+#     <td><div align="center">0.3024</div></td>
+#     <td>0.4540</td>
+#     <td><div align="center">0.3086</div></td>
+#     <td>0.3112</td>
 #   </tr>
 #    <tr>
 #     <th scope="row">Gradient Boosted Regression</th>
-#     <td><div align="center">0.3117</div></td>
-#     <td>0.5089</td>
-#     <td><div align="center"><strong> 0.3107 </strong></div></td>
-#     <td>0.3264</td>
+#     <td><div align="center">0.2568</div></td>
+#     <td>0.3954</td>
+#     <td><div align="center"><strong> 0.2544 </strong></div></td>
+#     <td>0.2577</td>
 #   </tr>
 # </table>
 # 
 # <br>
-# Training two models to predict casual and registred rentals accordingly gave us slightly better results. In all models prediction for casual users were significant worse than for registered users. It follows that there is no strict rule for renting cars for casual users / there is some other variable, not present in our dataset, that could better model  casual renting.
+# Training two models to predict casual and registred rentals accordingly gave us slightly better results. In all models prediction for casual users were significant worse than for registered users. It follows our understanding that there is no strict rule for renting bikes for casual users / there is some other variable, not present in our dataset, that could better model  casual renting.
 
 # RMSLE can be used when we don’t want to penalize huge differences when both the values are huge numbers, on the other hand it's harder to compare those results to others. That's why we also measured $R^2$ metric which in a way is standariezed. 
 # 
@@ -2189,24 +2202,24 @@ plt.xlabel('Gradient Boosted Tree Regression Residuals')
 #   </tr>
 #   <tr>
 #     <th scope="row">Linear Regression</th>
-#     <td><div align="center">0.8041</div></td>
-#     <td>0.7262</td>
-#     <td><div align="center">0.8085</div></td>
-#     <td>0.8019</td>
+#     <td><div align="center">0.9207</div></td>
+#     <td>0.8718</td>
+#     <td><div align="center">0.9190</div></td>
+#     <td>0.9214</td>
 #   </tr>
 #   <tr>
 #     <th scope="row">Random Forest Regression</th>
-#     <td><div align="center">0.9143</div></td>
-#     <td>0.8923</td>
-#     <td><div align="center">0.9204</div></td>
-#     <td>0.9109</td>
+#     <td><div align="center">0.9405</div></td>
+#     <td>0.9025</td>
+#     <td><div align="center">0.9396</div></td>
+#     <td>0.9416</td>
 #   </tr>
 #    <tr>
 #     <th scope="row">Gradient Boosted Regression</th>
-#     <td><div align="center">0.9373</div></td>
-#     <td>0.8941</td>
-#     <td><div align="center"><strong> 0.9427 </strong></div></td>
-#     <td>0.9293</td>
+#     <td><div align="center">0.9533</div></td>
+#     <td>0.9374</td>
+#     <td><div align="center"><strong> 0.9567 </strong></div></td>
+#     <td>0.9540</td>
 #   </tr>
 # </table>
 # 
@@ -2220,7 +2233,7 @@ plt.xlabel('Gradient Boosted Tree Regression Residuals')
 # <li>0,9 - 1,0 - very good</li>
 # </ul>
 
-# ** It's worth to notice that combinig two models results in better accuracy than each of them had separately. **
+# ** It's worth to notice that combinig two models (for registered and casual) results in better accuracy than each of them had separately. **
 # <table>
 #   <col>
 #   <colgroup span="4"></colgroup>
@@ -2238,134 +2251,158 @@ plt.xlabel('Gradient Boosted Tree Regression Residuals')
 #   <tr>
 #   <tr>
 #     <th scope="row">Random Forest Regression</th>
-#     <td><p style="color:#66CDAA; text-align:center">0.3117</p></td>
-#     <td><p style="color:#FFA500; text-align:center">0.5089</p></td>
-#     <td><p style="color:#32CD32; text-align:center"><strong> 0.3107 </strong></p></td>
-#     <td>0.3264</td>
+#     <td><p style="color:#66CDAA; text-align:center">0.2568</p></td>
+#     <td><p style="color:#FFA500; text-align:center">0.3954</p></td>
+#     <td><p style="color:#32CD32; text-align:center"><strong> 0.2544 </strong></p></td>
+#     <td>0.2577</td>
 #   </tr>
 # </table>
 # 
-# ** So it's good idea to combine prediction from two best machine learning algorithms: Random Forest Regression and Gradient Boosted Regression **
+# ** So it's good idea to combine prediction from two / three machine learning algorithms: Linear Regression, Random Forest Regression and Gradient Boosted Regression **
 
-# ** We need to plot curve ratio to RMSLE to verify the split proportion **
+# ** We need to plot curve ratio to RMSLE to verify the split proportion for both SUM and COUNT prediction. **
 
-# In[ ]:
+# In[187]:
 
-rmsle_sum_list = []
-rmsle_count_list = []
+rmsle_sum_rf_gbt = []
+rmsle_count_rf_gbt = []
+rmsle_sum_lr_rf = []
+rmsle_count_lr_rf = []
+rmsle_sum_lr_gbt = []
+rmsle_count_lr_gbt = []
+
 ratio_array = np.linspace(0.05,1,20)
 
 for ratio in ratio_array:
-    rmsle_sum_list.append(evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_sum'])
-    rmsle_count_list.append(evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_count'])
+    rmsle_sum_rf_gbt.append(evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_sum'])
+    rmsle_count_rf_gbt.append(evaluate_mixed_prediction(rf_all_sum, rf_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_count'])
+    rmsle_sum_lr_rf.append(evaluate_mixed_prediction(lr_all_sum, lr_all_count,rf_all_sum, rf_all_count, ratio=float(ratio))['rmsle_sum'])
+    rmsle_count_lr_rf.append(evaluate_mixed_prediction( lr_all_sum, lr_all_count,rf_all_sum, rf_all_count,ratio=float(ratio))['rmsle_count'])
+    rmsle_sum_lr_gbt.append(evaluate_mixed_prediction(lr_all_sum, lr_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_sum'])
+    rmsle_count_lr_gbt.append(evaluate_mixed_prediction(lr_all_sum, lr_all_count, gbt_all_sum, gbt_all_count,ratio=float(ratio))['rmsle_count']) 
 
 
 # ** We can see that  split proportion around 0.3 gives us best result. **
 
-# In[ ]:
+# In[199]:
 
-plt.plot(ratio_array, rmsle_sum_list)
-plt.xlabel('Ratio')
-plt.ylabel('RMSLE')
-plt.title('Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
+fig,axes= plt.subplots(nrows=3, ncols=2, figsize=(15,10))
+
+axes[0][0].plot(ratio_array, rmsle_sum_rf_gbt, c='orange')
+axes[0][0].set_xlabel('Ratio')
+axes[0][0].set_ylabel('RMSLE')
+axes[0][0].set_title('SUM: Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
+
+axes[0][1].plot(ratio_array, rmsle_count_rf_gbt, c='orange')
+axes[0][1].set_xlabel('Ratio')
+axes[0][1].set_ylabel('RMSLE')
+axes[0][1].set_title('COUNT: Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
+
+axes[1][0].plot(ratio_array, rmsle_sum_lr_rf, c='green')
+axes[1][0].set_xlabel('Ratio')
+axes[1][0].set_ylabel('RMSLE')
+axes[1][0].set_title('SUM: Ratio * LinearRegression + (1 - Ratio) * RandomForest')
+
+axes[1][1].plot(ratio_array, rmsle_count_lr_rf, c='green')
+axes[1][1].set_xlabel('Ratio')
+axes[1][1].set_ylabel('RMSLE')
+axes[1][1].set_title('COUNT: Ratio * LinearRegression + (1 - Ratio) * RandomForest')
+
+axes[2][0].plot(ratio_array, rmsle_sum_lr_gbt, c='red')
+axes[2][0].set_xlabel('Ratio')
+axes[2][0].set_ylabel('RMSLE')
+axes[2][0].set_title('SUM: Ratio * LinearRegression + (1 - Ratio) * GradientBoostedTree')
+
+axes[2][1].plot(ratio_array, rmsle_count_lr_gbt, c='red')
+axes[2][1].set_xlabel('Ratio')
+axes[2][1].set_ylabel('RMSLE')
+axes[2][1].set_title('COUNT: Ratio * LinearRegression + (1 - Ratio) * GradientBoostedTree')
+
+plt.subplots_adjust(hspace = 0.3)
+plt.tight_layout
 
 
-# In[ ]:
+# ** Get the best ratio split. **
 
-plt.plot(ratio_array, rmsle_count_list)
-plt.xlabel('Ratio')
-plt.ylabel('RMSLE')
-plt.title('Ratio * RandomForest + (1 - Ratio) * GradientBoostedTree')
+# In[189]:
+
+best_ratio = float(ratio_array[rmsle_sum_rf_gbt.index(min(rmsle_sum_rf_gbt))])
+best_ratio
 
 
-# ### Final best result on 'testing' data is ** 0.309 ** 
+# In[190]:
 
-# In[ ]:
+print('%.3f' % min(rmsle_sum_rf_gbt))
+print('%.3f' % min(rmsle_count_rf_gbt))
 
-'%.3f' % min(rmsle_sum_list)
 
+# ** Final best  result on 'testing' data: **
+# ### SUM -  0.255,   COUNT -  0.258
 
 # ___
 # ## 6. Predict on KAGGLE test set
 
-# ** Get the best ratio split. **
+# ### COMMENTED - predictions from best  models: Random Forest Regression and Gradient Boosted Regression Tree.
+# **  Although on validation set those models have best results, on Kaggle test set they have poorer results. Seems like Gradient Boosted is overfitting data. ** 
 
-# In[ ]:
+# In[166]:
 
-best_ratio = float(ratio_array[rmsle_sum_list.index(min(rmsle_sum_list))])
-#best_ratio = float(0.2)
+# predicted_Kaggle_sum_cat = {}
+# predicted_Kaggle_count_cat = {}
 
-
-# In[ ]:
-
-# featureIndexer has to be fitted to all data (train and test) in order to work properly
-featureIndexer =    VectorIndexer(inputCol="features_to_filter", outputCol="indexedFeatures", maxCategories=4)    .fit(trainingData_no_dummy.unionAll(testData_no_dummy).unionAll(testKaggle_no_dummy))
-
-
-# ** Previous models were trained on 0.8 part of whole train data set. Now we need to train on whole dataset with chosen params. **
-
-# In[ ]:
-
-# model params taken from previous cv 
-rfr = RandomForestRegressor(numTrees=1000, maxDepth=15, minInstancesPerNode=10, featuresCol="features")
-rf_cv_models_dict_final = {}
-
-for label in ['label_registered','label_casual', 'label_count']: 
-    pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[label], rfr.setLabelCol(label)])
-    model = pipeline.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
-    rf_cv_models_dict_final[label] = model
+# for hour_cat in hour_cat_list:
+#     rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = make_prediction(rf_cv_models_dict[hour_cat], feature_selector_no_dummy[hour_cat], hour_cat, dummy=False, Kaggle=True)
+#     gbt_predictionsTestData_r, gbt_predictionsTestData_c, gbt_predictionsTestData_count = make_prediction(gbt_cv_models_dict[hour_cat], feature_selector_no_dummy[hour_cat], hour_cat, dummy=False, Kaggle=True)
+#     predicted_Kaggle_sum_cat[hour_cat] = predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c, gbt_predictionsTestData_r, gbt_predictionsTestData_c, lambdas=bc_lambda_dict[hour_cat], ratio=best_ratio)
+#     predicted_Kaggle_count_cat[hour_cat] = predict_count_Kaggle_test(rf_predictionsTestData_count, gbt_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat], ratio=best_ratio)
 
 
-# In[ ]:
+# ### Predictions from models: Random Forest Regression and Linear Regression.
 
-# model params taken from previous cv 
-gbt = GBTRegressor(maxDepth=5, minInstancesPerNode=10, maxIter=150, featuresCol="features")
-gbtr_cv_models_dict_final = {}
-
-for label in ['label_registered','label_casual', 'label_count']: 
-    pipeline = Pipeline(stages=[featureIndexer, feature_selector_no_dummy[label], gbt.setLabelCol(label)])
-    model = pipeline.fit(trainingData_no_dummy.unionAll(testData_no_dummy))
-    gbtr_cv_models_dict_final[label] = model
-
-
-# ** Get 'raw' prediction on Kaggle test dataset from best two models: Random Forest Regression and Gradient Boosted Regression Tree. ** 
-
-# In[ ]:
+# In[191]:
 
 predicted_Kaggle_sum_cat = {}
 predicted_Kaggle_count_cat = {}
 
 for hour_cat in hour_cat_list:
     rf_predictionsTestData_r, rf_predictionsTestData_c, rf_predictionsTestData_count = make_prediction(rf_cv_models_dict[hour_cat], feature_selector_no_dummy[hour_cat], hour_cat, dummy=False, Kaggle=True)
-    gbt_predictionsTestData_r, gbt_predictionsTestData_c, gbt_predictionsTestData_count = make_prediction(gbt_cv_models_dict[hour_cat], feature_selector_no_dummy[hour_cat], hour_cat, dummy=False, Kaggle=True)
-    predicted_Kaggle_sum_cat[hour_cat] = predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c, gbt_predictionsTestData_r, gbt_predictionsTestData_c, lambdas=bc_lambda_dict[hour_cat], ratio=best_ratio)
-    predicted_Kaggle_count_cat[hour_cat] = predict_count_Kaggle_test(rf_predictionsTestData_count, gbt_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat], ratio=best_ratio)
+    lr_predictionsTestData_r, lr_predictionsTestData_c, lr_predictionsTestData_count = make_prediction(lr_cv_models_dict[hour_cat], feature_selector_dummy[hour_cat], hour_cat, dummy=True, Kaggle=True)
+    predicted_Kaggle_sum_cat[hour_cat] = predict_Kaggle_test(rf_predictionsTestData_r, rf_predictionsTestData_c, lr_predictionsTestData_r, lr_predictionsTestData_c, lambdas=bc_lambda_dict[hour_cat], ratio=float(0.2))
+    predicted_Kaggle_count_cat[hour_cat] = predict_count_Kaggle_test(rf_predictionsTestData_count, lr_predictionsTestData_count, lambdas=bc_lambda_dict[hour_cat], ratio=float(0.2))
 
 
-# In[ ]:
+# In[192]:
 
 all_sum_Kaggle, all_count_Kaggle = concatenate_Kaggle_predictions(predicted_Kaggle_sum_cat, predicted_Kaggle_count_cat)
 
 
-# In[ ]:
+# In[193]:
 
 all_sum_Kaggle['datetime'] = pd.to_datetime(all_sum_Kaggle['datetime'])
-all_count_Kaggle['datetime'] = pd.to_datetime(all_count_Kaggle['datetime'])
 kaggleSubmission_sum = all_sum_Kaggle.sort_values("datetime").reset_index(drop=True)
+
+
+# In[194]:
+
+all_count_Kaggle['datetime'] = pd.to_datetime(all_count_Kaggle['datetime'])
 kaggleSubmission_count = all_count_Kaggle.sort_values("datetime").reset_index(drop=True)
 
 
-# In[ ]:
+# In[195]:
 
 kaggleSubmission_sum.head()
 
 
-# In[ ]:
+# ** Kaggle result: 0.44472 **
+
+# In[196]:
 
 kaggleSubmission_count.head()
 
 
-# In[ ]:
+# ** Kaggle result: 0.42860 **
+
+# In[197]:
 
 kaggleSubmission_sum.to_csv('../data/kaggleSubmission_sum.csv', index=False)
 kaggleSubmission_count.to_csv('../data/kaggleSubmission_count.csv', index=False)
@@ -2374,13 +2411,16 @@ kaggleSubmission_count.to_csv('../data/kaggleSubmission_count.csv', index=False)
 # ## Future improvements:
 # ** Due to computation and time limitations there are ares where additional research could be done: **
 # <ul>
-#     <li> Make more hour categories and more separate models to better minimize RMSLE for hours with very few bike rentals </li>
-#     <li> Try different ratio split on Random Forest Regression and Gradient Boosted Regression Tree to tune the final result (there is limitation of submissions per day) </li>
+#     <li> Tune regularization of Gradient Boosted Tree Regression models to deal with overfitting. </li> 
+#     <li> Take a close look on predicted outliers (clearny seen on scatter plots with predictions vs labels). </li>
+#     <li> Make more / less hour categories and more separate models to better minimize RMSLE for hours with very few bike rentals. RMSLE metric hurts relatively more when the numbers are smaller. </li>
+#     <li> Try different ratio split on Random Forest Regression / Linear Regression / Gradient Boosted Regression Tree to tune the final result (there is limitation of submissions per day) </li>
 #     <li> Try another kind of interpolation, set different threshold for outliers  </li>
 #     <li> Use another tool for feature selection - ex. mutual info </li>
 #     <li> Make PCA analysis to reduce number of features </li>
 #     <li> Make greater GridSearch for better model tuning (requires high computation perfomance, ex. on AWS EMR clusters) </li>
 #     <li> Use another regression models like Deep Neural Networks for regression </li>
+#     <li> Use sckit-learn instead of Apache Spark ML (difference on algorithms implementations). </li>
 # </ul>
 
-# ## Final result from Kaggle submission is 0.42, good work :-)
+# # Final result from Kaggle submission is <p style="color:red"><strong> 0.42860</strong></p> <br> 
